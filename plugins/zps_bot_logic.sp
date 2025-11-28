@@ -982,6 +982,8 @@ if (!wantsMove)
 
     float yaw;
     YawFromDirection(dir, yaw);
+float yaw;
+YawFromDirection(dir, yaw);
 
     angles[0] = 0.0;
     angles[1] = yaw;
@@ -992,6 +994,11 @@ if (!wantsMove)
     vel[0] = BOTLOGIC_FORWARD_SPEED * g_BotSpeedScale[client];
     vel[1] = 0.0;
     vel[2] = 0.0;
+vel[0] = dir[0] * BOTLOGIC_FORWARD_SPEED;
+vel[0] *= g_BotSpeedScale[client];
+vel[1] = dir[1] * BOTLOGIC_FORWARD_SPEED;
+vel[1] *= g_BotSpeedScale[client];
+vel[2] = 0.0;
 
 if (now >= g_BotBounceStart[client] && now <= g_BotBounceEnd[client])
 {
