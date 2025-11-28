@@ -31,11 +31,19 @@ resume direct chasing.
 #define BOTLOGIC_THINK_INTERVAL 0.20
 #define BOTLOGIC_TARGET_RADIUS 50.0
 #define BOTLOGIC_DOORWAY_RADIUS 15.0
+#define BOTLOGIC_DOORWAY_SPEED_SCALE 0.70
 #define BOTLOGIC_FORWARD_SPEED 250.0
 
 #define BOTLOGIC_STUCK_DIST_SQ 25.0 // ~5 units in XY
 #define BOTLOGIC_STUCK_TIME 1.0 // seconds before we consider the bot stuck
 #define BOTLOGIC_BOUNCE_DURATION 0.5 // seconds to keep jump/crouch bounce active
+#define BOTLOGIC_BACKOFF_DURATION 0.35 // seconds to move backward before bouncing
+#define BOTLOGIC_BOUNCE_COOLDOWN 1.5 // seconds between bounce attempts
+
+#define BOTLOGIC_PATH_CACHE_DURATION 2.0
+#define BOTLOGIC_PATH_RETRY_COOLDOWN 0.5
+
+#define BOTLOGIC_RETARGET_COOLDOWN 1.0
 
 #define BOTLOGIC_AUTO_ACQUIRE_RANGE 2000.0
 
@@ -85,12 +93,24 @@ int g_BotPath[MAXPLAYERS + 1][BOTLOGIC_MAX_PATH_NODES];
 int g_BotPathLength[MAXPLAYERS + 1];
 int g_BotPathIndex[MAXPLAYERS + 1];
 
+int g_BotCachedPath[MAXPLAYERS + 1][BOTLOGIC_MAX_PATH_NODES];
+int g_BotCachedPathLength[MAXPLAYERS + 1];
+float g_BotCachedPathTime[MAXPLAYERS + 1];
+float g_BotNextPathRebuild[MAXPLAYERS + 1];
+
 float g_BotMoveDir[MAXPLAYERS + 1][3];
 float g_BotLastThink[MAXPLAYERS + 1];
+float g_BotSpeedScale[MAXPLAYERS + 1];
 
 float g_BotLastPos[MAXPLAYERS + 1][3];
 float g_BotStuckAccum[MAXPLAYERS + 1];
-float g_BotStuckBounceUntil[MAXPLAYERS + 1];
+float g_BotBackoffDir[MAXPLAYERS + 1][3];
+float g_BotBackoffUntil[MAXPLAYERS + 1];
+float g_BotBounceStart[MAXPLAYERS + 1];
+float g_BotBounceEnd[MAXPLAYERS + 1];
+float g_BotBounceCooldownUntil[MAXPLAYERS + 1];
+
+float g_BotNextRetargetTime[MAXPLAYERS + 1];
 
 // ---------------------------------------------------------------------------
 // Utility helpers
@@ -238,12 +258,22 @@ return false;
 g_BotPathLength[client] = pathLen;
 g_BotPathIndex[client] = 0;
 
-for (int i = 0; i < pathLen; i++)
-{
-g_BotPath[client][i] = tempPath[i];
-}
+    for (int i = 0; i < pathLen; i++)
+    {
+        g_BotPath[client][i] = tempPath[i];
+    }
 
-return true;
+    float now = GetGameTime();
+    g_BotCachedPathLength[client] = pathLen;
+    g_BotCachedPathTime[client]   = now;
+    for (int i = 0; i < pathLen; i++)
+    {
+        g_BotCachedPath[client][i] = tempPath[i];
+    }
+
+    g_BotNextPathRebuild[client] = now + BOTLOGIC_PATH_RETRY_COOLDOWN;
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,236 +282,273 @@ return true;
 
 static void ClearBotState(int client)
 {
-g_BotState[client] = BotState_Idle;
-g_BotTargetType[client] = BotTarget_None;
-g_BotTargetWaypoint[client] = -1;
-g_BotTargetPlayer[client] = 0;
-ZeroVector(g_BotTargetPos[client]);
-g_BotPathLength[client] = 0;
-g_BotPathIndex[client] = 0;
-ZeroVector(g_BotMoveDir[client]);
+    g_BotState[client] = BotState_Idle;
+    g_BotTargetType[client] = BotTarget_None;
+    g_BotTargetWaypoint[client] = -1;
+    g_BotTargetPlayer[client] = 0;
+    ZeroVector(g_BotTargetPos[client]);
+    g_BotPathLength[client] = 0;
+    g_BotPathIndex[client] = 0;
+    g_BotCachedPathLength[client] = 0;
+    g_BotCachedPathTime[client] = 0.0;
+    g_BotNextPathRebuild[client] = 0.0;
+    ZeroVector(g_BotMoveDir[client]);
+    g_BotSpeedScale[client] = 1.0;
+    ZeroVector(g_BotBackoffDir[client]);
+    g_BotBackoffUntil[client] = 0.0;
+    g_BotBounceStart[client] = 0.0;
+    g_BotBounceEnd[client] = 0.0;
+    g_BotBounceCooldownUntil[client] = 0.0;
+    g_BotNextRetargetTime[client] = 0.0;
 }
 
-static void AutoAcquireTarget(int client)
+static void AutoAcquireTarget(int client, float now)
 {
-float myPos[3];
-GetClientAbsOrigin(client, myPos);
+    float myPos[3];
+    GetClientAbsOrigin(client, myPos);
 
-float bestDistSq = BOTLOGIC_AUTO_ACQUIRE_RANGE * BOTLOGIC_AUTO_ACQUIRE_RANGE;
-int   bestTarget = 0;
+    float bestDistSq = BOTLOGIC_AUTO_ACQUIRE_RANGE * BOTLOGIC_AUTO_ACQUIRE_RANGE;
+    int   bestTarget = 0;
 
-for (int i = 1; i <= MaxClients; i++)
-{
-    if (!IsClientReady(i) || !IsPlayerAlive(i))
+    for (int i = 1; i <= MaxClients; i++)
     {
-        continue;
+        if (!IsClientReady(i) || !IsPlayerAlive(i))
+        {
+            continue;
+        }
+
+        if (GetClientTeam(i) == GetClientTeam(client))
+        {
+            continue;
+        }
+
+        float otherPos[3];
+        GetClientAbsOrigin(i, otherPos);
+
+        float distSq = GetDistanceSquared2D(myPos, otherPos);
+        if (distSq < bestDistSq)
+        {
+            bestDistSq = distSq;
+            bestTarget = i;
+        }
     }
 
-    if (GetClientTeam(i) == GetClientTeam(client))
+    if (bestTarget != 0)
     {
-        continue;
+        g_BotTargetType[client]   = BotTarget_Player;
+        g_BotTargetPlayer[client] = bestTarget;
+        g_BotPathLength[client]   = 0;
+        g_BotPathIndex[client]    = 0;
+        g_BotState[client]        = BotState_ChasingPlayer;
+        g_BotNextRetargetTime[client] = now + BOTLOGIC_RETARGET_COOLDOWN;
     }
-
-    float otherPos[3];
-    GetClientAbsOrigin(i, otherPos);
-
-    float distSq = GetDistanceSquared2D(myPos, otherPos);
-    if (distSq < bestDistSq)
-    {
-        bestDistSq = distSq;
-        bestTarget = i;
-    }
-}
-
-if (bestTarget != 0)
-{
-    g_BotTargetType[client]   = BotTarget_Player;
-    g_BotTargetPlayer[client] = bestTarget;
-    g_BotPathLength[client]   = 0;
-    g_BotPathIndex[client]    = 0;
-    g_BotState[client]        = BotState_ChasingPlayer;
-}
-
-
 }
 
 // ---------------------------------------------------------------------------
 // Target-specific think functions
 // ---------------------------------------------------------------------------
 
-static void ThinkPlayerTarget(int client)
+static void ThinkPlayerTarget(int client, float now)
 {
-int target = g_BotTargetPlayer[client];
+    int target = g_BotTargetPlayer[client];
 
-if (!IsClientReady(target) || !IsPlayerAlive(target))
-{
-    ClearBotState(client);
-    return;
+    if (!IsClientReady(target) || !IsPlayerAlive(target))
+    {
+        if (now >= g_BotNextRetargetTime[client])
+        {
+            AutoAcquireTarget(client, now);
+        }
+        else
+        {
+            ClearBotState(client);
+        }
+        return;
+    }
+
+    // Prefer direct chase if we have a truly walkable LOS path.
+    if (HasClearLineToTarget(client, target))
+    {
+        g_BotPathLength[client] = 0;
+        g_BotPathIndex[client]  = 0;
+
+        float targetPos[3];
+        GetClientAbsOrigin(target, targetPos);
+
+        float dir[3];
+        float dist;
+        if (!ComputeDirectionToPosition(client, targetPos, dir, dist))
+        {
+            ZeroVector(g_BotMoveDir[client]);
+            g_BotState[client] = BotState_ChasingPlayer;
+            return;
+        }
+
+        CopyVector(dir, g_BotMoveDir[client]);
+        g_BotState[client] = BotState_ChasingPlayer;
+        return;
+    }
+
+    // No clear movement LOS: fall back to waypoint pathing toward the player's nearest waypoint.
+    if (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[client])
+    {
+        bool usedCache = false;
+        if (g_BotCachedPathLength[client] > 0 && (now - g_BotCachedPathTime[client]) <= BOTLOGIC_PATH_CACHE_DURATION)
+        {
+            g_BotPathLength[client] = g_BotCachedPathLength[client];
+            g_BotPathIndex[client]  = 0;
+            for (int i = 0; i < g_BotCachedPathLength[client]; i++)
+            {
+                g_BotPath[client][i] = g_BotCachedPath[client][i];
+            }
+            usedCache = true;
+        }
+
+        if (!usedCache && now >= g_BotNextPathRebuild[client])
+        {
+            int endId = Waypoint_FindNearestToClient(target);
+            if (endId >= 0)
+            {
+                BuildPathToWaypoint(client, endId);
+            }
+            else
+            {
+                g_BotNextPathRebuild[client] = now + BOTLOGIC_PATH_RETRY_COOLDOWN;
+            }
+        }
+
+        if (g_BotPathLength[client] <= 0)
+        {
+            ZeroVector(g_BotMoveDir[client]);
+            g_BotState[client] = BotState_ChasingPlayer;
+            return;
+        }
+    }
+
+    int nodeId = g_BotPath[client][g_BotPathIndex[client]];
+
+    float nodePos[3];
+    if (!Waypoint_GetOrigin(nodeId, nodePos))
+    {
+        g_BotPathIndex[client]++;
+        if (g_BotPathIndex[client] >= g_BotPathLength[client])
+        {
+            ZeroVector(g_BotMoveDir[client]);
+            g_BotState[client] = BotState_ChasingPlayer;
+            return;
+        }
+
+        nodeId = g_BotPath[client][g_BotPathIndex[client]];
+        if (!Waypoint_GetOrigin(nodeId, nodePos))
+        {
+            ZeroVector(g_BotMoveDir[client]);
+            g_BotState[client] = BotState_ChasingPlayer;
+            return;
+        }
+    }
+
+    float origin[3];
+    GetClientAbsOrigin(client, origin);
+
+    float distSq = GetDistanceSquared2D(origin, nodePos);
+    if (distSq <= BOTLOGIC_TARGET_RADIUS * BOTLOGIC_TARGET_RADIUS)
+    {
+        g_BotPathIndex[client]++;
+        if (g_BotPathIndex[client] >= g_BotPathLength[client])
+        {
+            ZeroVector(g_BotMoveDir[client]);
+            g_BotState[client] = BotState_ChasingPlayer;
+            return;
+        }
+
+        // Recurse into next node this frame for smoother path transitions.
+        ThinkPlayerTarget(client, now);
+        return;
+    }
+
+    float dir2[3];
+    float dummyDist;
+    if (!ComputeDirectionToPosition(client, nodePos, dir2, dummyDist))
+    {
+        ZeroVector(g_BotMoveDir[client]);
+        g_BotState[client] = BotState_ChasingPlayer;
+        return;
+    }
+
+    CopyVector(dir2, g_BotMoveDir[client]);
+    g_BotState[client] = BotState_MovingPath;
+
+    if (Waypoint_IsDoorway(nodeId) && distSq <= (BOTLOGIC_TARGET_RADIUS * BOTLOGIC_TARGET_RADIUS * 4.0))
+    {
+        g_BotSpeedScale[client] = BOTLOGIC_DOORWAY_SPEED_SCALE;
+    }
 }
 
-// Prefer direct chase if we have a truly walkable LOS path.
-if (HasClearLineToTarget(client, target))
+static void ThinkWaypointTarget(int client)
 {
-    g_BotPathLength[client] = 0;
-    g_BotPathIndex[client]  = 0;
+    int nodeId = g_BotTargetWaypoint[client];
+    if (nodeId < 0)
+    {
+        ClearBotState(client);
+        return;
+    }
 
+    float nodePos[3];
+    if (!Waypoint_GetOrigin(nodeId, nodePos))
+    {
+        ClearBotState(client);
+        return;
+    }
+
+    float origin[3];
+    GetClientAbsOrigin(client, origin);
+
+    float distSq = GetDistanceSquared2D(origin, nodePos);
+    float radius = Waypoint_IsDoorway(nodeId) ? BOTLOGIC_DOORWAY_RADIUS : BOTLOGIC_TARGET_RADIUS;
+
+    if (distSq <= radius * radius)
+    {
+        ClearBotState(client);
+        return;
+    }
+
+    float dir[3];
+    float dummyDist;
+    if (!ComputeDirectionToPosition(client, nodePos, dir, dummyDist))
+    {
+        ClearBotState(client);
+        return;
+    }
+
+    CopyVector(dir, g_BotMoveDir[client]);
+    g_BotState[client] = BotState_MovingPath;
+
+    if (Waypoint_IsDoorway(nodeId) && distSq <= (radius * radius * 4.0))
+    {
+        g_BotSpeedScale[client] = BOTLOGIC_DOORWAY_SPEED_SCALE;
+    }
+}
+
+static void ThinkPositionTarget(int client)
+{
     float targetPos[3];
-    GetClientAbsOrigin(target, targetPos);
+    CopyVector(g_BotTargetPos[client], targetPos);
 
     float dir[3];
     float dist;
     if (!ComputeDirectionToPosition(client, targetPos, dir, dist))
     {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
+        ClearBotState(client);
+        return;
+    }
+
+    if (dist <= BOTLOGIC_TARGET_RADIUS)
+    {
+        ClearBotState(client);
         return;
     }
 
     CopyVector(dir, g_BotMoveDir[client]);
-    g_BotState[client] = BotState_ChasingPlayer;
-    return;
-}
-
-// No clear movement LOS: fall back to waypoint pathing toward the player's nearest waypoint.
-if (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[client])
-{
-    int endId = Waypoint_FindNearestToClient(target);
-    if (endId < 0)
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        return;
-    }
-
-    if (!BuildPathToWaypoint(client, endId))
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        return;
-    }
-}
-
-int nodeId = g_BotPath[client][g_BotPathIndex[client]];
-
-float nodePos[3];
-if (!Waypoint_GetOrigin(nodeId, nodePos))
-{
-    g_BotPathIndex[client]++;
-    if (g_BotPathIndex[client] >= g_BotPathLength[client])
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        return;
-    }
-
-    nodeId = g_BotPath[client][g_BotPathIndex[client]];
-    if (!Waypoint_GetOrigin(nodeId, nodePos))
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        return;
-    }
-}
-
-float origin[3];
-GetClientAbsOrigin(client, origin);
-
-float distSq = GetDistanceSquared2D(origin, nodePos);
-if (distSq <= BOTLOGIC_TARGET_RADIUS * BOTLOGIC_TARGET_RADIUS)
-{
-    g_BotPathIndex[client]++;
-    if (g_BotPathIndex[client] >= g_BotPathLength[client])
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        return;
-    }
-
-    // Recurse into next node this frame for smoother path transitions.
-    ThinkPlayerTarget(client);
-    return;
-}
-
-float dir2[3];
-float dummyDist;
-if (!ComputeDirectionToPosition(client, nodePos, dir2, dummyDist))
-{
-    ZeroVector(g_BotMoveDir[client]);
-    g_BotState[client] = BotState_ChasingPlayer;
-    return;
-}
-
-CopyVector(dir2, g_BotMoveDir[client]);
-g_BotState[client] = BotState_MovingPath;
-
-
-}
-
-static void ThinkWaypointTarget(int client)
-{
-int nodeId = g_BotTargetWaypoint[client];
-if (nodeId < 0)
-{
-ClearBotState(client);
-return;
-}
-
-float nodePos[3];
-if (!Waypoint_GetOrigin(nodeId, nodePos))
-{
-    ClearBotState(client);
-    return;
-}
-
-float origin[3];
-GetClientAbsOrigin(client, origin);
-
-float distSq = GetDistanceSquared2D(origin, nodePos);
-float radius = Waypoint_IsDoorway(nodeId) ? BOTLOGIC_DOORWAY_RADIUS : BOTLOGIC_TARGET_RADIUS;
-
-if (distSq <= radius * radius)
-{
-    ClearBotState(client);
-    return;
-}
-
-float dir[3];
-float dummyDist;
-if (!ComputeDirectionToPosition(client, nodePos, dir, dummyDist))
-{
-    ClearBotState(client);
-    return;
-}
-
-CopyVector(dir, g_BotMoveDir[client]);
-g_BotState[client] = BotState_MovingPath;
-
-
-}
-
-static void ThinkPositionTarget(int client)
-{
-float targetPos[3];
-CopyVector(g_BotTargetPos[client], targetPos);
-
-float dir[3];
-float dist;
-if (!ComputeDirectionToPosition(client, targetPos, dir, dist))
-{
-    ClearBotState(client);
-    return;
-}
-
-if (dist <= BOTLOGIC_TARGET_RADIUS)
-{
-    ClearBotState(client);
-    return;
-}
-
-CopyVector(dir, g_BotMoveDir[client]);
-g_BotState[client] = BotState_MovingPath;
-
-
+    g_BotState[client] = BotState_MovingPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,9 +576,14 @@ if (now - lastThink < BOTLOGIC_THINK_INTERVAL)
 
 g_BotLastThink[client] = now;
 
+g_BotSpeedScale[client] = 1.0;
+
 if (g_BotTargetType[client] == BotTarget_None)
 {
-    AutoAcquireTarget(client);
+    if (now >= g_BotNextRetargetTime[client])
+    {
+        AutoAcquireTarget(client, now);
+    }
     if (g_BotTargetType[client] == BotTarget_None)
     {
         ClearBotState(client);
@@ -521,7 +593,7 @@ if (g_BotTargetType[client] == BotTarget_None)
 
 if (g_BotTargetType[client] == BotTarget_Player)
 {
-    ThinkPlayerTarget(client);
+    ThinkPlayerTarget(client, now);
 }
 else if (g_BotTargetType[client] == BotTarget_Waypoint)
 {
@@ -573,10 +645,27 @@ float distSq = dx * dx + dy * dy;
 if (distSq < BOTLOGIC_STUCK_DIST_SQ)
 {
     g_BotStuckAccum[client] += BOTLOGIC_THINK_INTERVAL;
-    if (g_BotStuckAccum[client] >= BOTLOGIC_STUCK_TIME)
+    if (g_BotStuckAccum[client] >= BOTLOGIC_STUCK_TIME && now >= g_BotBounceCooldownUntil[client])
     {
         g_BotStuckAccum[client]       = 0.0;
-        g_BotStuckBounceUntil[client] = now + BOTLOGIC_BOUNCE_DURATION;
+        float mag = SquareRoot(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        if (mag > 0.0)
+        {
+            g_BotBackoffDir[client][0] = -dir[0] / mag;
+            g_BotBackoffDir[client][1] = -dir[1] / mag;
+            g_BotBackoffDir[client][2] = 0.0;
+        }
+        else
+        {
+            g_BotBackoffDir[client][0] = -1.0;
+            g_BotBackoffDir[client][1] = 0.0;
+            g_BotBackoffDir[client][2] = 0.0;
+        }
+
+        g_BotBackoffUntil[client] = now + BOTLOGIC_BACKOFF_DURATION;
+        g_BotBounceStart[client]  = g_BotBackoffUntil[client];
+        g_BotBounceEnd[client]    = g_BotBounceStart[client] + BOTLOGIC_BOUNCE_DURATION;
+        g_BotBounceCooldownUntil[client] = now + BOTLOGIC_BOUNCE_COOLDOWN;
 
         // If we're chasing a player directly and have no waypoint path yet,
         // try to switch to a waypoint-based path to get around obstacles.
@@ -631,22 +720,31 @@ return APLRes_Success;
 
 public void OnPluginStart()
 {
-for (int i = 1; i <= MaxClients; i++)
-{
-g_bIsCustomBot[i] = false;
-g_BotState[i] = BotState_Idle;
-g_BotTargetType[i] = BotTarget_None;
-g_BotTargetWaypoint[i] = -1;
-g_BotTargetPlayer[i] = 0;
-ZeroVector(g_BotTargetPos[i]);
-g_BotPathLength[i] = 0;
-g_BotPathIndex[i] = 0;
-ZeroVector(g_BotMoveDir[i]);
-g_BotLastThink[i] = 0.0;
-ZeroVector(g_BotLastPos[i]);
-g_BotStuckAccum[i] = 0.0;
-g_BotStuckBounceUntil[i] = 0.0;
-}
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        g_bIsCustomBot[i] = false;
+        g_BotState[i] = BotState_Idle;
+        g_BotTargetType[i] = BotTarget_None;
+        g_BotTargetWaypoint[i] = -1;
+        g_BotTargetPlayer[i] = 0;
+        ZeroVector(g_BotTargetPos[i]);
+        g_BotPathLength[i] = 0;
+        g_BotPathIndex[i] = 0;
+        g_BotCachedPathLength[i] = 0;
+        g_BotCachedPathTime[i] = 0.0;
+        g_BotNextPathRebuild[i] = 0.0;
+        ZeroVector(g_BotMoveDir[i]);
+        g_BotSpeedScale[i] = 1.0;
+        g_BotLastThink[i] = 0.0;
+        ZeroVector(g_BotLastPos[i]);
+        g_BotStuckAccum[i] = 0.0;
+        ZeroVector(g_BotBackoffDir[i]);
+        g_BotBackoffUntil[i] = 0.0;
+        g_BotBounceStart[i] = 0.0;
+        g_BotBounceEnd[i] = 0.0;
+        g_BotBounceCooldownUntil[i] = 0.0;
+        g_BotNextRetargetTime[i] = 0.0;
+    }
 }
 
 public void OnMapStart()
@@ -761,6 +859,7 @@ g_BotPathLength[client]   = 0;
 g_BotPathIndex[client]    = 0;
 ZeroVector(g_BotMoveDir[client]);
 g_BotState[client]        = BotState_ChasingPlayer;
+g_BotNextRetargetTime[client] = GetGameTime() + BOTLOGIC_RETARGET_COOLDOWN;
 
 return 1;
 
@@ -870,6 +969,17 @@ if (!wantsMove)
     return Plugin_Continue;
 }
 
+if (now < g_BotBackoffUntil[client])
+{
+    CopyVector(g_BotBackoffDir[client], dir);
+}
+
+wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
+if (!wantsMove)
+{
+    return Plugin_Continue;
+}
+
 float yaw;
 YawFromDirection(dir, yaw);
 
@@ -880,10 +990,12 @@ angles[2] = 0.0;
 buttons |= IN_FORWARD;
 
 vel[0] = dir[0] * BOTLOGIC_FORWARD_SPEED;
+vel[0] *= g_BotSpeedScale[client];
 vel[1] = dir[1] * BOTLOGIC_FORWARD_SPEED;
+vel[1] *= g_BotSpeedScale[client];
 vel[2] = 0.0;
 
-if (now < g_BotStuckBounceUntil[client])
+if (now >= g_BotBounceStart[client] && now <= g_BotBounceEnd[client])
 {
     buttons |= IN_JUMP;
     buttons |= IN_DUCK;
@@ -903,6 +1015,6 @@ public Plugin myinfo =
 name = "ZPS Bot Logic",
 author = "Custom Framework",
 description = "Core movement and targeting logic for custom zombie bots",
-version = "0.3.2",
+version = "0.4.0",
 url = ""
 };
