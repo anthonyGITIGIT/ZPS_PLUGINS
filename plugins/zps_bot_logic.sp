@@ -261,6 +261,25 @@ static void LogBehaviorChangeIfNeeded(int client, BotState oldState, BotTargetTy
                   reason);
 }
 
+static void ResetBotRuntimeState(int client)
+{
+    g_BotState[client] = BotState_Idle;
+    g_BotTargetType[client] = BotTarget_None;
+    g_BotTargetWaypoint[client] = -1;
+    g_BotTargetPlayer[client] = 0;
+    ZeroVector(g_BotTargetPos[client]);
+    g_BotObstacleEntity[client] = -1;
+    g_BotResumeTarget[client] = BotTarget_None;
+    ZeroVector(g_BotObstaclePos[client]);
+    g_BotPathLength[client] = 0;
+    g_BotPathIndex[client] = 0;
+    ZeroVector(g_BotMoveDir[client]);
+    g_BotLastThink[client] = 0.0;
+    ZeroVector(g_BotLastPos[client]);
+    g_BotStuckAccum[client] = 0.0;
+    g_BotStuckBounceUntil[client] = 0.0;
+}
+
 static void OnBotLogicDebugChanged(ConVar cvar, const char[] oldValue, const char[] newValue)
 {
     g_BotDebugEnabled = cvar.BoolValue;
@@ -516,15 +535,8 @@ static void ClearBotState(int client, const char[] reason = "reset")
     BotState oldState = g_BotState[client];
     BotTargetType oldTarget = g_BotTargetType[client];
 
-g_BotState[client] = BotState_Idle;
-g_BotTargetType[client] = BotTarget_None;
-g_BotTargetWaypoint[client] = -1;
-g_BotTargetPlayer[client] = 0;
-ZeroVector(g_BotTargetPos[client]);
-ClearObstacleTarget(client);
-    g_BotPathLength[client] = 0;
-    g_BotPathIndex[client] = 0;
-    ZeroVector(g_BotMoveDir[client]);
+    ClearObstacleTarget(client);
+    ResetBotRuntimeState(client);
 
     LogBehaviorChangeIfNeeded(client, oldState, oldTarget, reason);
 }
@@ -882,7 +894,7 @@ if (!g_bIsCustomBot[client])
 return;
 }
 
-if (!IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
+if (!IsClientConnected(client) || !IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
 {
     ClearBotState(client);
     return;
@@ -1040,22 +1052,8 @@ public void OnPluginStart()
 
     for (int i = 1; i <= MaxClients; i++)
     {
-g_bIsCustomBot[i] = false;
-g_BotState[i] = BotState_Idle;
-g_BotTargetType[i] = BotTarget_None;
-g_BotTargetWaypoint[i] = -1;
-g_BotTargetPlayer[i] = 0;
-ZeroVector(g_BotTargetPos[i]);
-g_BotObstacleEntity[i] = -1;
-g_BotResumeTarget[i] = BotTarget_None;
-ZeroVector(g_BotObstaclePos[i]);
-g_BotPathLength[i] = 0;
-g_BotPathIndex[i] = 0;
-ZeroVector(g_BotMoveDir[i]);
-g_BotLastThink[i] = 0.0;
-    ZeroVector(g_BotLastPos[i]);
-    g_BotStuckAccum[i] = 0.0;
-    g_BotStuckBounceUntil[i] = 0.0;
+        g_bIsCustomBot[i] = false;
+        ResetBotRuntimeState(i);
     }
 }
 
@@ -1086,7 +1084,8 @@ for (int i = 1; i <= MaxClients; i++)
 {
 if (g_bIsCustomBot[i])
 {
-ClearBotState(i);
+ClearBotState(i, "map start cleanup");
+            g_bIsCustomBot[i] = false;
 }
 }
 }
@@ -1100,8 +1099,8 @@ return;
 
 if (g_bIsCustomBot[client])
 {
-    g_bIsCustomBot[client] = false;
-    ClearBotState(client);
+    ClearBotState(client, "disconnect");
+        g_bIsCustomBot[client] = false;
 }
 
 
@@ -1148,7 +1147,7 @@ return 0;
 }
 
 g_bIsCustomBot[client] = false;
-ClearBotState(client);
+    ClearBotState(client, "unregister");
 return 1;
 
 
@@ -1282,7 +1281,7 @@ return 1;
 
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon)
 {
-if (!g_bIsCustomBot[client] || !IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
+if (!IsClientConnected(client) || !g_bIsCustomBot[client] || !IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
 {
 return Plugin_Continue;
 }
