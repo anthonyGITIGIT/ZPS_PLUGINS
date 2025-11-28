@@ -186,6 +186,33 @@ static bool IsDestructibleObstacle(int entity)
     return false;
 }
 
+static bool TraceHitBlocksTarget(const float start[3], const float end[3], Handle trace, int &blockerOut, float hitPosOut[3])
+{
+    if (!TR_DidHit(trace))
+    {
+        return false;
+    }
+
+    float fraction = TR_GetFraction(trace);
+    if (fraction >= 1.0)
+    {
+        return false;
+    }
+
+    TR_GetEndPosition(hitPosOut, trace);
+
+    float hitDist    = GetVectorDistance(start, hitPosOut);
+    float targetDist = GetVectorDistance(start, end);
+
+    if (hitDist + 1.0 >= targetDist)
+    {
+        return false;
+    }
+
+    blockerOut = TR_GetEntityIndex(trace);
+    return true;
+}
+
 static float GetDistanceSquared2D(const float a[3], const float b[3])
 {
 float dx = a[0] - b[0];
@@ -354,9 +381,9 @@ Step 2: player-sized hull trace (movement LOS).
 */
 static bool HasClearLineToTarget(int bot, int target, int &blockerOut, bool &isDestructibleOut, float hitPosOut[3])
 {
-blockerOut = -1;
-isDestructibleOut = false;
-ZeroVector(hitPosOut);
+    blockerOut = -1;
+    isDestructibleOut = false;
+    ZeroVector(hitPosOut);
 
 if (!IsClientReady(bot) || !IsClientReady(target))
 {
@@ -369,11 +396,9 @@ GetClientEyePosition(bot, botEye);
 GetClientEyePosition(target, targetEye);
 
 Handle ray = TR_TraceRayFilterEx(botEye, targetEye, MASK_SOLID, RayType_EndPoint, TraceFilter_IgnorePlayers, 0);
-bool blocked = TR_DidHit(ray);
+bool blocked = TraceHitBlocksTarget(botEye, targetEye, ray, blockerOut, hitPosOut);
 if (blocked)
 {
-    blockerOut = TR_GetEntityIndex(ray);
-    TR_GetEndPosition(hitPosOut, ray);
     isDestructibleOut = IsDestructibleObstacle(blockerOut);
 }
 CloseHandle(ray);
@@ -392,11 +417,9 @@ float mins[3] = { -16.0, -16.0, 0.0 };
 float maxs[3] = { 16.0, 16.0, 64.0 };
 
 Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
-bool hullBlocked = TR_DidHit(hullTrace);
+bool hullBlocked = TraceHitBlocksTarget(botPos, targetPos, hullTrace, blockerOut, hitPosOut);
 if (hullBlocked)
 {
-    blockerOut = TR_GetEntityIndex(hullTrace);
-    TR_GetEndPosition(hitPosOut, hullTrace);
     isDestructibleOut = IsDestructibleObstacle(blockerOut);
 }
 CloseHandle(hullTrace);
@@ -426,12 +449,7 @@ static bool GetDestructibleBlockingPath(int bot, const float targetPos[3], int &
     float maxs[3] = { 16.0, 16.0, 64.0 };
 
     Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
-    bool blocked = TR_DidHit(hullTrace);
-    if (blocked)
-    {
-        blockerOut = TR_GetEntityIndex(hullTrace);
-        TR_GetEndPosition(hitPosOut, hullTrace);
-    }
+    bool blocked = TraceHitBlocksTarget(botPos, targetPos, hullTrace, blockerOut, hitPosOut);
     CloseHandle(hullTrace);
 
     return (blocked && IsDestructibleObstacle(blockerOut));
