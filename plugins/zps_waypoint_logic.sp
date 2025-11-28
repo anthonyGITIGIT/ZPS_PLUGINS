@@ -20,6 +20,7 @@
 
 #pragma semicolon 1
 #pragma newdecls required
+#pragma dynamic 65536
 
 #include <sourcemod>
 #include <sdktools>
@@ -937,6 +938,11 @@ static void LoadWaypointsFromFile()
         return;
     }
 
+    const int EDGE_CAPACITY = MAX_WAYPOINTS * MAX_LINKS_PER_WP;
+    int edgesFrom[EDGE_CAPACITY];
+    int edgesTo[EDGE_CAPACITY];
+    int edgeCount = 0;
+
     char line[256];
     int  lastNodeId = -1;
 
@@ -996,7 +1002,7 @@ static void LoadWaypointsFromFile()
         // Links line for the last node: "links: <id> <id> ..."
         if (StrContains(line, "links:") == 0)
         {
-            if (lastNodeId < 0 || !IsValidWaypointId(lastNodeId))
+            if (lastNodeId < 0)
             {
                 continue;
             }
@@ -1016,12 +1022,19 @@ static void LoadWaypointsFromFile()
                 }
 
                 int other = StringToInt(parts[i]);
-                if (!IsValidWaypointId(other))
+                if (other < 0 || other >= MAX_WAYPOINTS)
                 {
                     continue;
                 }
 
-                LinkWaypoints(lastNodeId, other);
+                if (edgeCount >= EDGE_CAPACITY)
+                {
+                    continue;
+                }
+
+                edgesFrom[edgeCount] = lastNodeId;
+                edgesTo[edgeCount]   = other;
+                edgeCount++;
             }
 
             continue;
@@ -1029,6 +1042,11 @@ static void LoadWaypointsFromFile()
     }
 
     CloseHandle(file);
+
+    for (int i = 0; i < edgeCount; i++)
+    {
+        LinkWaypoints(edgesFrom[i], edgesTo[i]);
+    }
 }
 
 // ---------------------------------------------------------------------------
