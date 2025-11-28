@@ -633,6 +633,12 @@ if (hitIsDestructible && blocker > 0)
     return;
 }
 
+if (hitIsDestructible && blocker > 0)
+{
+    SetObstacleTarget(client, blocker, hitPos);
+    return;
+}
+
 // No clear movement LOS: fall back to waypoint pathing toward the player's nearest waypoint.
 bool pathBuilt = false;
     if (g_WaypointLibraryAvailable && (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[client]))
@@ -777,6 +783,14 @@ float radius = GetWaypointArrivalRadius(nodeId);
 if (distSq <= radius * radius)
 {
     ClearBotState(client, "waypoint reached");
+    return;
+}
+
+int blockingDestructible;
+float destructibleHit[3];
+if (GetDestructibleBlockingPath(client, nodePos, blockingDestructible, destructibleHit))
+{
+    SetObstacleTarget(client, blockingDestructible, destructibleHit);
     return;
 }
 
