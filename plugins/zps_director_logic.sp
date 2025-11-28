@@ -46,6 +46,12 @@ native bool BotLogic_ClearBotTarget(int client);
 
 bool g_bManagedBot[MAXPLAYERS + 1];
 int  g_iNextBotId = 1;
+bool g_bBotLogicAvailable = false;
+
+static void RefreshBotLogicAvailability()
+{
+    g_bBotLogicAvailable = (GetFeatureStatus(FeatureType_Native, "BotLogic_RegisterBot") == FeatureStatus_Available);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,7 +72,9 @@ static bool IsClientReady(int client)
  */
 static bool SafeRegisterBotLogic(int client)
 {
-    if (GetFeatureStatus(FeatureType_Native, "BotLogic_RegisterBot") != FeatureStatus_Available)
+    RefreshBotLogicAvailability();
+
+    if (!g_bBotLogicAvailable)
     {
         return false;
     }
@@ -203,6 +211,8 @@ public void OnPluginStart()
     RegAdminCmd("sm_zps_spawnbot", Cmd_SpawnDebugBot, ADMFLAG_CHEATS,
         "Spawn one or more debug zombie bots using base game zombie spawn entities.");
 
+    RefreshBotLogicAvailability();
+
     // Clear state
     for (int i = 1; i <= MaxClients; i++)
     {
@@ -228,6 +238,30 @@ public void OnClientDisconnect(int client)
     {
         SafeUnregisterBotLogic(client);
         g_bManagedBot[client] = false;
+    }
+}
+
+public void OnLibraryAdded(const char[] name)
+{
+    if (StrEqual(name, "bot_logic"))
+    {
+        RefreshBotLogicAvailability();
+
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if (g_bManagedBot[i])
+            {
+                SafeRegisterBotLogic(i);
+            }
+        }
+    }
+}
+
+public void OnLibraryRemoved(const char[] name)
+{
+    if (StrEqual(name, "bot_logic"))
+    {
+        g_bBotLogicAvailable = false;
     }
 }
 
