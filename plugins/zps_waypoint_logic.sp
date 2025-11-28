@@ -530,7 +530,7 @@ static void DrawWaypointsForClient(int client)
             end[2]   += 10.0;
 
             TE_SetupBeamPoints(start, end, g_iBeamSprite, 0,
-                               0, 0, 0.30, 1.2, 1.0, 0, 0.0, linkColor, 0);
+                               0, 0, 0.30, 1.32, 1.10, 0, 0.0, linkColor, 0);
             TE_SendToClient(client);
         }
     }
@@ -553,7 +553,7 @@ static void DrawWaypointsForClient(int client)
         int   color[4];
 
         // Colors:
-        //  - Normal: Cyan/Teal
+        //  - Normal: Cyan/Teal (doorways use orange)
         //  - Aimed: Lime
         //  - Selected: Red
         if (i == selected)
@@ -563,6 +563,10 @@ static void DrawWaypointsForClient(int client)
         else if (i == aimed)
         {
             color[0] = 128; color[1] = 255; color[2] = 0;   color[3] = 255;
+        }
+        else if (g_WPDoorway[i])
+        {
+            color[0] = 255; color[1] = 165; color[2] = 0;   color[3] = 200;
         }
         else
         {
@@ -581,8 +585,8 @@ static void DrawWaypointsForClient(int client)
 
         // Pulsing thickness, clamped to avoid negative widths (DataTable m_fWidth/m_fEndWidth warnings)
         float pulse = Sine(time * 8.0) * 3.0;
-        float width = 1.8 + pulse;
-        float endWidth = 2.4 + pulse;
+        float width = 1.98 + pulse;
+        float endWidth = 2.64 + pulse;
         if (width < 0.1)
         {
             width = 0.1;
@@ -628,7 +632,7 @@ static void DrawWaypointsForClient(int client)
             0,          // StartFrame
             0,          // FrameRate
             0.40,       // Life
-            4.0,        // Width
+            4.4,        // Width
             0.0,        // Amplitude
             ringColor,
             0,          // Speed
