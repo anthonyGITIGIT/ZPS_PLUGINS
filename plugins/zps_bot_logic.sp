@@ -616,7 +616,39 @@ else
     ClearBotState(client);
 }
 
+    g_BotLastThink[client] = now;
 
+    g_BotSpeedScale[client] = 1.0;
+
+    if (g_BotTargetType[client] == BotTarget_None)
+    {
+        if (now >= g_BotNextRetargetTime[client])
+        {
+            AutoAcquireTarget(client, now);
+        }
+        if (g_BotTargetType[client] == BotTarget_None)
+        {
+            ClearBotState(client);
+            return;
+        }
+    }
+
+    if (g_BotTargetType[client] == BotTarget_Player)
+    {
+        ThinkPlayerTarget(client, now);
+    }
+    else if (g_BotTargetType[client] == BotTarget_Waypoint)
+    {
+        ThinkWaypointTarget(client);
+    }
+    else if (g_BotTargetType[client] == BotTarget_Position)
+    {
+        ThinkPositionTarget(client);
+    }
+    else
+    {
+        ClearBotState(client);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -675,9 +707,7 @@ if (distSq < BOTLOGIC_STUCK_DIST_SQ)
         g_BotBounceEnd[client]    = g_BotBounceStart[client] + BOTLOGIC_BOUNCE_DURATION;
         g_BotBounceCooldownUntil[client] = now + BOTLOGIC_BOUNCE_COOLDOWN;
 
-        // If we're chasing a player directly and have no waypoint path yet,
-        // try to switch to a waypoint-based path to get around obstacles.
-        if (g_BotTargetType[client] == BotTarget_Player && g_BotPathLength[client] <= 0)
+        if (g_BotStuckAccum[client] >= BOTLOGIC_STUCK_TIME && now >= g_BotBounceCooldownUntil[client])
         {
             g_BotStuckAccum[client]       = 0.0;
             float mag = SquareRoot(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
@@ -723,7 +753,9 @@ if (distSq < BOTLOGIC_STUCK_DIST_SQ)
     CopyVector(pos, g_BotLastPos[client]);
 
 
+    CopyVector(pos, g_BotLastPos[client]);
 }
+
 
 // ---------------------------------------------------------------------------
 // Natives and plugin API
