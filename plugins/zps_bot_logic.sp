@@ -578,6 +578,14 @@ static void BotThink(int client, float now)
 
     g_BotSpeedScale[client] = 1.0;
 
+g_BotSpeedScale[client] = 1.0;
+
+if (g_BotTargetType[client] == BotTarget_None)
+{
+    if (now >= g_BotNextRetargetTime[client])
+    {
+        AutoAcquireTarget(client, now);
+    }
     if (g_BotTargetType[client] == BotTarget_None)
     {
         if (now >= g_BotNextRetargetTime[client])
@@ -591,22 +599,22 @@ static void BotThink(int client, float now)
         }
     }
 
-    if (g_BotTargetType[client] == BotTarget_Player)
-    {
-        ThinkPlayerTarget(client, now);
-    }
-    else if (g_BotTargetType[client] == BotTarget_Waypoint)
-    {
-        ThinkWaypointTarget(client);
-    }
-    else if (g_BotTargetType[client] == BotTarget_Position)
-    {
-        ThinkPositionTarget(client);
-    }
-    else
-    {
-        ClearBotState(client);
-    }
+if (g_BotTargetType[client] == BotTarget_Player)
+{
+    ThinkPlayerTarget(client, now);
+}
+else if (g_BotTargetType[client] == BotTarget_Waypoint)
+{
+    ThinkWaypointTarget(client);
+}
+else if (g_BotTargetType[client] == BotTarget_Position)
+{
+    ThinkPositionTarget(client);
+}
+else
+{
+    ClearBotState(client);
+}
 
 
 }
@@ -642,10 +650,34 @@ static void UpdateBotStuckState(int client, float now)
     float dy = pos[1] - g_BotLastPos[client][1];
     float distSq = dx * dx + dy * dy;
 
-    if (distSq < BOTLOGIC_STUCK_DIST_SQ)
+if (distSq < BOTLOGIC_STUCK_DIST_SQ)
+{
+    g_BotStuckAccum[client] += BOTLOGIC_THINK_INTERVAL;
+    if (g_BotStuckAccum[client] >= BOTLOGIC_STUCK_TIME && now >= g_BotBounceCooldownUntil[client])
     {
-        g_BotStuckAccum[client] += BOTLOGIC_THINK_INTERVAL;
-        if (g_BotStuckAccum[client] >= BOTLOGIC_STUCK_TIME && now >= g_BotBounceCooldownUntil[client])
+        g_BotStuckAccum[client]       = 0.0;
+        float mag = SquareRoot(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+        if (mag > 0.0)
+        {
+            g_BotBackoffDir[client][0] = -dir[0] / mag;
+            g_BotBackoffDir[client][1] = -dir[1] / mag;
+            g_BotBackoffDir[client][2] = 0.0;
+        }
+        else
+        {
+            g_BotBackoffDir[client][0] = -1.0;
+            g_BotBackoffDir[client][1] = 0.0;
+            g_BotBackoffDir[client][2] = 0.0;
+        }
+
+        g_BotBackoffUntil[client] = now + BOTLOGIC_BACKOFF_DURATION;
+        g_BotBounceStart[client]  = g_BotBackoffUntil[client];
+        g_BotBounceEnd[client]    = g_BotBounceStart[client] + BOTLOGIC_BOUNCE_DURATION;
+        g_BotBounceCooldownUntil[client] = now + BOTLOGIC_BOUNCE_COOLDOWN;
+
+        // If we're chasing a player directly and have no waypoint path yet,
+        // try to switch to a waypoint-based path to get around obstacles.
+        if (g_BotTargetType[client] == BotTarget_Player && g_BotPathLength[client] <= 0)
         {
             g_BotStuckAccum[client]       = 0.0;
             float mag = SquareRoot(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
@@ -853,13 +885,13 @@ public int Native_BotLogic_SetBotTargetPlayer(Handle plugin, int numParams)
         return 0;
     }
 
-    g_BotTargetType[client]   = BotTarget_Player;
-    g_BotTargetPlayer[client] = target;
-    g_BotPathLength[client]   = 0;
-    g_BotPathIndex[client]    = 0;
-    ZeroVector(g_BotMoveDir[client]);
-    g_BotState[client]        = BotState_ChasingPlayer;
-    g_BotNextRetargetTime[client] = GetGameTime() + BOTLOGIC_RETARGET_COOLDOWN;
+g_BotTargetType[client]   = BotTarget_Player;
+g_BotTargetPlayer[client] = target;
+g_BotPathLength[client]   = 0;
+g_BotPathIndex[client]    = 0;
+ZeroVector(g_BotMoveDir[client]);
+g_BotState[client]        = BotState_ChasingPlayer;
+g_BotNextRetargetTime[client] = GetGameTime() + BOTLOGIC_RETARGET_COOLDOWN;
 
     return 1;
 
@@ -969,25 +1001,42 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
         return Plugin_Continue;
     }
 
-    if (now < g_BotBackoffUntil[client])
-    {
-        CopyVector(g_BotBackoffDir[client], dir);
-    }
+if (now < g_BotBackoffUntil[client])
+{
+    CopyVector(g_BotBackoffDir[client], dir);
+}
 
-    wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
-    if (!wantsMove)
-    {
-        return Plugin_Continue;
-    }
+wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
+if (!wantsMove)
+{
+    return Plugin_Continue;
+}
 
     float yaw;
     YawFromDirection(dir, yaw);
+float yaw;
+YawFromDirection(dir, yaw);
 
     angles[0] = 0.0;
     angles[1] = yaw;
     angles[2] = 0.0;
 
     buttons |= IN_FORWARD;
+
+    vel[0] = BOTLOGIC_FORWARD_SPEED * g_BotSpeedScale[client];
+    vel[1] = 0.0;
+    vel[2] = 0.0;
+vel[0] = dir[0] * BOTLOGIC_FORWARD_SPEED;
+vel[0] *= g_BotSpeedScale[client];
+vel[1] = dir[1] * BOTLOGIC_FORWARD_SPEED;
+vel[1] *= g_BotSpeedScale[client];
+vel[2] = 0.0;
+
+if (now >= g_BotBounceStart[client] && now <= g_BotBounceEnd[client])
+{
+    buttons |= IN_JUMP;
+    buttons |= IN_DUCK;
+}
 
     vel[0] = BOTLOGIC_FORWARD_SPEED * g_BotSpeedScale[client];
     vel[1] = 0.0;
@@ -1010,9 +1059,9 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 
 public Plugin myinfo =
 {
-    name = "ZPS Bot Logic",
-    author = "Custom Framework",
-    description = "Core movement and targeting logic for custom zombie bots",
-    version = "0.4.0",
-    url = ""
+name = "ZPS Bot Logic",
+author = "Custom Framework",
+description = "Core movement and targeting logic for custom zombie bots",
+version = "0.4.0",
+url = ""
 };
