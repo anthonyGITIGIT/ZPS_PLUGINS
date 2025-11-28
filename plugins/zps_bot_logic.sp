@@ -77,6 +77,9 @@ BotTarget_Obstacle
 
 bool g_bIsCustomBot[MAXPLAYERS + 1];
 
+ConVar g_hBotDebugCvar;
+bool g_BotDebugEnabled;
+
 BotState g_BotState[MAXPLAYERS + 1];
 BotTargetType g_BotTargetType[MAXPLAYERS + 1];
 
@@ -230,7 +233,83 @@ return true;
 
 static void YawFromDirection(const float dir[3], float &yawOut)
 {
-yawOut = RadToDeg(ArcTangent2(dir[1], dir[0]));
+    yawOut = RadToDeg(ArcTangent2(dir[1], dir[0]));
+}
+
+// ---------------------------------------------------------------------------
+// Debug logging
+// ---------------------------------------------------------------------------
+
+static void LogBehaviorChangeIfNeeded(int client, BotState oldState, BotTargetType oldTarget, const char[] reason)
+{
+    if (!g_BotDebugEnabled)
+    {
+        return;
+    }
+
+    if (g_BotState[client] == oldState && g_BotTargetType[client] == oldTarget)
+    {
+        return;
+    }
+
+    PrintToServer("[BotLogic][Debug] bot %d state %d->%d target %d->%d: %s",
+                  client,
+                  oldState,
+                  g_BotState[client],
+                  oldTarget,
+                  g_BotTargetType[client],
+                  reason);
+}
+
+static void OnBotLogicDebugChanged(ConVar cvar, const char[] oldValue, const char[] newValue)
+{
+    g_BotDebugEnabled = cvar.BoolValue;
+    PrintToServer("[BotLogic] Debug logging %s", g_BotDebugEnabled ? "enabled" : "disabled");
+}
+
+// ---------------------------------------------------------------------------
+// Waypoint availability helpers
+// ---------------------------------------------------------------------------
+
+static bool RefreshWaypointAvailability()
+{
+    bool available = LibraryExists("waypoint_logic");
+
+    if (available)
+    {
+        if (GetFeatureStatus(FeatureType_Native, "Waypoint_FindNearestToClient") != FeatureStatus_Available
+            || GetFeatureStatus(FeatureType_Native, "Waypoint_GetPath") != FeatureStatus_Available
+            || GetFeatureStatus(FeatureType_Native, "Waypoint_GetOrigin") != FeatureStatus_Available
+            || GetFeatureStatus(FeatureType_Native, "Waypoint_IsDoorway") != FeatureStatus_Available)
+        {
+            available = false;
+        }
+    }
+
+    if (available != g_WaypointLibraryAvailable)
+    {
+        g_WaypointLibraryAvailable = available;
+        if (g_BotDebugEnabled)
+        {
+            PrintToServer("[BotLogic][Debug] Waypoint library %s", available ? "available" : "missing/partial");
+        }
+
+        if (!available)
+        {
+            for (int i = 1; i <= MaxClients; i++)
+            {
+                g_BotPathLength[i] = 0;
+                g_BotPathIndex[i] = 0;
+
+                if (g_BotTargetType[i] == BotTarget_Waypoint)
+                {
+                    ClearBotState(i);
+                }
+            }
+        }
+    }
+
+    return g_WaypointLibraryAvailable;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,41 +481,59 @@ return false;
 
 static void ClearObstacleTarget(int client)
 {
+BotState oldState = g_BotState[client];
+BotTargetType oldTarget = g_BotTargetType[client];
+
 g_BotObstacleEntity[client] = -1;
     BotTargetType resumeType = g_BotResumeTarget[client];
     g_BotResumeTarget[client] = BotTarget_None;
     ZeroVector(g_BotObstaclePos[client]);
     g_BotTargetType[client] = (resumeType != BotTarget_None) ? resumeType : BotTarget_None;
+
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "cleared obstacle");
 }
 
 static void SetObstacleTarget(int client, int obstacleEnt, const float hitPos[3])
 {
+    BotState oldState = g_BotState[client];
+    BotTargetType oldTarget = g_BotTargetType[client];
+
     g_BotObstacleEntity[client] = obstacleEnt;
     g_BotResumeTarget[client] = g_BotTargetType[client];
     CopyVector(hitPos, g_BotObstaclePos[client]);
     g_BotTargetType[client] = BotTarget_Obstacle;
     g_BotState[client] = BotState_AttackingObstacle;
+
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "attacking destructible obstacle");
 }
 
 // ---------------------------------------------------------------------------
 // Core bot state helpers
 // ---------------------------------------------------------------------------
 
-static void ClearBotState(int client)
+static void ClearBotState(int client, const char[] reason = "reset")
 {
+    BotState oldState = g_BotState[client];
+    BotTargetType oldTarget = g_BotTargetType[client];
+
 g_BotState[client] = BotState_Idle;
 g_BotTargetType[client] = BotTarget_None;
 g_BotTargetWaypoint[client] = -1;
 g_BotTargetPlayer[client] = 0;
 ZeroVector(g_BotTargetPos[client]);
 ClearObstacleTarget(client);
-g_BotPathLength[client] = 0;
-g_BotPathIndex[client] = 0;
-ZeroVector(g_BotMoveDir[client]);
+    g_BotPathLength[client] = 0;
+    g_BotPathIndex[client] = 0;
+    ZeroVector(g_BotMoveDir[client]);
+
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, reason);
 }
 
 static void AutoAcquireTarget(int client)
 {
+    BotState oldState = g_BotState[client];
+    BotTargetType oldTarget = g_BotTargetType[client];
+
 float myPos[3];
 GetClientAbsOrigin(client, myPos);
 
@@ -473,6 +570,8 @@ if (bestTarget != 0)
     g_BotPathLength[client]   = 0;
     g_BotPathIndex[client]    = 0;
     g_BotState[client]        = BotState_ChasingPlayer;
+
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "auto-acquired player target");
 }
 
 
@@ -484,11 +583,19 @@ if (bestTarget != 0)
 
 static void ThinkPlayerTarget(int client)
 {
+BotState oldState = g_BotState[client];
+BotTargetType oldTarget = g_BotTargetType[client];
+
+    if (!g_WaypointLibraryAvailable)
+    {
+        RefreshWaypointAvailability();
+    }
+
 int target = g_BotTargetPlayer[client];
 
 if (!IsClientReady(target) || !IsPlayerAlive(target))
 {
-    ClearBotState(client);
+    ClearBotState(client, "player target invalid");
     return;
 }
 
@@ -515,6 +622,14 @@ if (HasClearLineToTarget(client, target, blocker, hitIsDestructible, hitPos))
 
     CopyVector(dir, g_BotMoveDir[client]);
     g_BotState[client] = BotState_ChasingPlayer;
+
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (clear LOS)");
+    return;
+}
+
+if (hitIsDestructible && blocker > 0)
+{
+    SetObstacleTarget(client, blocker, hitPos);
     return;
 }
 
@@ -525,6 +640,7 @@ if (hitIsDestructible && blocker > 0)
 }
 
 // No clear movement LOS: fall back to waypoint pathing toward the player's nearest waypoint.
+bool pathBuilt = false;
     if (g_WaypointLibraryAvailable && (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[client]))
 {
     int endId = Waypoint_FindNearestToClient(target);
@@ -532,23 +648,61 @@ if (hitIsDestructible && blocker > 0)
     {
         ZeroVector(g_BotMoveDir[client]);
         g_BotState[client] = BotState_ChasingPlayer;
+        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (no nearest waypoint)");
         return;
     }
 
-    if (!BuildPathToWaypoint(client, endId))
+    pathBuilt = BuildPathToWaypoint(client, endId);
+    if (!pathBuilt)
     {
         ZeroVector(g_BotMoveDir[client]);
         g_BotState[client] = BotState_ChasingPlayer;
+        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (path build failed)");
         return;
     }
+}
+
+if (!pathBuilt)
+{
+    float targetPos[3];
+    GetClientAbsOrigin(target, targetPos);
+
+    float directDir[3];
+    float directDist;
+    if (!ComputeDirectionToPosition(client, targetPos, directDir, directDist))
+    {
+        ZeroVector(g_BotMoveDir[client]);
+        g_BotState[client] = BotState_ChasingPlayer;
+        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "no path; cannot compute direction");
+        return;
+    }
+
+    CopyVector(directDir, g_BotMoveDir[client]);
+    g_BotState[client] = BotState_ChasingPlayer;
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, g_WaypointLibraryAvailable ? "direct chase (path unavailable)" : "direct chase (waypoints missing)");
+    return;
 }
 
 float nodePos[3];
 int nodeId;
 if (!TryGetCurrentPathNode(client, nodePos, nodeId))
 {
+    float targetPos[3];
+    GetClientAbsOrigin(target, targetPos);
+
+    float directDir[3];
+    float directDist;
+    if (ComputeDirectionToPosition(client, targetPos, directDir, directDist))
+    {
+        CopyVector(directDir, g_BotMoveDir[client]);
+        g_BotState[client] = BotState_ChasingPlayer;
+        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (path node invalid)");
+        return;
+    }
+
     ZeroVector(g_BotMoveDir[client]);
     g_BotState[client] = BotState_ChasingPlayer;
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (no path node)");
     return;
 }
 
@@ -591,22 +745,32 @@ if (!ComputeDirectionToPosition(client, nodePos, dir2, dummyDist))
 CopyVector(dir2, g_BotMoveDir[client]);
 g_BotState[client] = BotState_MovingPath;
 
+LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "moving along waypoint path to player");
+
 
 }
 
 static void ThinkWaypointTarget(int client)
 {
+BotState oldState = g_BotState[client];
+BotTargetType oldTarget = g_BotTargetType[client];
+
+    if (!g_WaypointLibraryAvailable)
+    {
+        RefreshWaypointAvailability();
+    }
+
 int nodeId = g_BotTargetWaypoint[client];
     if (!g_WaypointLibraryAvailable || nodeId < 0)
     {
-        ClearBotState(client);
+        ClearBotState(client, "waypoint target cleared (unavailable)");
         return;
 }
 
 float nodePos[3];
 if (!Waypoint_GetOrigin(nodeId, nodePos))
 {
-    ClearBotState(client);
+    ClearBotState(client, "waypoint target missing origin");
     return;
 }
 
@@ -618,7 +782,15 @@ float radius = GetWaypointArrivalRadius(nodeId);
 
 if (distSq <= radius * radius)
 {
-    ClearBotState(client);
+    ClearBotState(client, "waypoint reached");
+    return;
+}
+
+int blockingDestructible;
+float destructibleHit[3];
+if (GetDestructibleBlockingPath(client, nodePos, blockingDestructible, destructibleHit))
+{
+    SetObstacleTarget(client, blockingDestructible, destructibleHit);
     return;
 }
 
@@ -634,14 +806,14 @@ float dir[3];
 float dummyDist;
 if (!ComputeDirectionToPosition(client, nodePos, dir, dummyDist))
 {
-    ClearBotState(client);
+    ClearBotState(client, "waypoint direction failed");
     return;
 }
 
 CopyVector(dir, g_BotMoveDir[client]);
 g_BotState[client] = BotState_MovingPath;
 
-
+    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "moving to ordered waypoint");
 }
 
 static void ThinkPositionTarget(int client)
@@ -729,6 +901,11 @@ if (!IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
     ClearBotState(client);
     return;
 }
+
+    if (!g_WaypointLibraryAvailable)
+    {
+        RefreshWaypointAvailability();
+    }
 
 float lastThink = g_BotLastThink[client];
 if (now - lastThink < BOTLOGIC_THINK_INTERVAL)
@@ -869,7 +1046,11 @@ return APLRes_Success;
 
 public void OnPluginStart()
 {
-    g_WaypointLibraryAvailable = LibraryExists("waypoint_logic");
+    g_hBotDebugCvar = CreateConVar("sm_botlogic_debug", "0", "Enable bot behavior debug logging", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_BotDebugEnabled = g_hBotDebugCvar.BoolValue;
+    g_hBotDebugCvar.AddChangeHook(OnBotLogicDebugChanged);
+
+    RefreshWaypointAvailability();
 
     for (int i = 1; i <= MaxClients; i++)
     {
@@ -894,14 +1075,14 @@ g_BotLastThink[i] = 0.0;
 
 public void OnAllPluginsLoaded()
 {
-    g_WaypointLibraryAvailable = LibraryExists("waypoint_logic");
+    RefreshWaypointAvailability();
 }
 
 public void OnLibraryAdded(const char[] name)
 {
     if (StrEqual(name, "waypoint_logic"))
     {
-        g_WaypointLibraryAvailable = true;
+        RefreshWaypointAvailability();
     }
 }
 
@@ -909,18 +1090,7 @@ public void OnLibraryRemoved(const char[] name)
 {
     if (StrEqual(name, "waypoint_logic"))
     {
-        g_WaypointLibraryAvailable = false;
-
-        for (int i = 1; i <= MaxClients; i++)
-        {
-            g_BotPathLength[i] = 0;
-            g_BotPathIndex[i] = 0;
-
-            if (g_BotTargetType[i] == BotTarget_Waypoint)
-            {
-                ClearBotState(i);
-            }
-        }
+        RefreshWaypointAvailability();
     }
 }
 
