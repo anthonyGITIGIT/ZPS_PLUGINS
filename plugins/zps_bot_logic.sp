@@ -57,6 +57,7 @@ enum BotState
 BotState_Idle = 0,
 BotState_MovingPath,
 BotState_ChasingPlayer,
+BotState_AttackingObstacle,
 BotState_Regrouping
 };
 
@@ -65,7 +66,8 @@ enum BotTargetType
 BotTarget_None = 0,
 BotTarget_Waypoint,
 BotTarget_Player,
-BotTarget_Position
+BotTarget_Position,
+BotTarget_Obstacle
 };
 
 // ---------------------------------------------------------------------------
@@ -80,6 +82,9 @@ BotTargetType g_BotTargetType[MAXPLAYERS + 1];
 int g_BotTargetWaypoint[MAXPLAYERS + 1];
 int g_BotTargetPlayer[MAXPLAYERS + 1];
 float g_BotTargetPos[MAXPLAYERS + 1][3];
+int g_BotObstacleEntity[MAXPLAYERS + 1];
+BotTargetType g_BotResumeTarget[MAXPLAYERS + 1];
+float g_BotObstaclePos[MAXPLAYERS + 1][3];
 
 int g_BotPath[MAXPLAYERS + 1][BOTLOGIC_MAX_PATH_NODES];
 int g_BotPathLength[MAXPLAYERS + 1];
@@ -113,6 +118,67 @@ static void CopyVector(const float src[3], float dest[3])
 dest[0] = src[0];
 dest[1] = src[1];
 dest[2] = src[2];
+}
+
+static bool GetEntityPosition(int entity, float posOut[3])
+{
+    if (!IsValidEntity(entity))
+    {
+        return false;
+    }
+
+    if (HasEntProp(entity, Prop_Send, "m_vecOrigin"))
+    {
+        GetEntPropVector(entity, Prop_Send, "m_vecOrigin", posOut);
+        return true;
+    }
+
+    if (HasEntProp(entity, Prop_Data, "m_vecAbsOrigin"))
+    {
+        GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", posOut);
+        return true;
+    }
+
+    return false;
+}
+
+static bool IsDestructibleObstacle(int entity)
+{
+    if (entity <= MaxClients || !IsValidEntity(entity))
+    {
+        return false;
+    }
+
+    char classname[64];
+    GetEntityClassname(entity, classname, sizeof(classname));
+
+    if (StrContains(classname, "breakable", false) != -1 || StrContains(classname, "barricade", false) != -1)
+    {
+        return true;
+    }
+
+    if (StrEqual(classname, "prop_physics", false) || StrEqual(classname, "prop_physics_multiplayer", false) || StrEqual(classname, "prop_physics_override", false))
+    {
+        return true;
+    }
+
+    if (StrEqual(classname, "func_physbox", false) || StrEqual(classname, "func_physbox_multiplayer", false) || StrEqual(classname, "func_breakable_surf", false))
+    {
+        return true;
+    }
+
+    if (HasEntProp(entity, Prop_Data, "m_takedamage") && GetEntProp(entity, Prop_Data, "m_takedamage") != 0)
+    {
+        if (HasEntProp(entity, Prop_Data, "m_iHealth"))
+        {
+            if (GetEntProp(entity, Prop_Data, "m_iHealth") > 0)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 static float GetDistanceSquared2D(const float a[3], const float b[3])
@@ -181,8 +247,12 @@ Step 1: cheap eye ray (visual LOS).
 
 Step 2: player-sized hull trace (movement LOS).
 */
-static bool HasClearLineToTarget(int bot, int target)
+static bool HasClearLineToTarget(int bot, int target, int &blockerOut, bool &isDestructibleOut, float hitPosOut[3])
 {
+blockerOut = -1;
+isDestructibleOut = false;
+ZeroVector(hitPosOut);
+
 if (!IsClientReady(bot) || !IsClientReady(target))
 {
 return false;
@@ -195,11 +265,17 @@ GetClientEyePosition(target, targetEye);
 
 Handle ray = TR_TraceRayFilterEx(botEye, targetEye, MASK_SOLID, RayType_EndPoint, TraceFilter_IgnorePlayers, 0);
 bool blocked = TR_DidHit(ray);
-CloseHandle(ray);
-
 if (blocked)
 {
-return false;
+    blockerOut = TR_GetEntityIndex(ray);
+    TR_GetEndPosition(hitPosOut, ray);
+    isDestructibleOut = IsDestructibleObstacle(blockerOut);
+}
+CloseHandle(ray);
+
+if (blocked && !isDestructibleOut)
+{
+    return false;
 }
 
 // Step 2: hull trace approximating the player collision box
@@ -212,9 +288,48 @@ float maxs[3] = { 16.0, 16.0, 64.0 };
 
 Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
 bool hullBlocked = TR_DidHit(hullTrace);
+if (hullBlocked)
+{
+    blockerOut = TR_GetEntityIndex(hullTrace);
+    TR_GetEndPosition(hitPosOut, hullTrace);
+    isDestructibleOut = IsDestructibleObstacle(blockerOut);
+}
 CloseHandle(hullTrace);
 
-return !hullBlocked;
+if (!hullBlocked)
+{
+    return true;
+}
+
+if (isDestructibleOut)
+{
+    return false;
+}
+
+return false;
+}
+
+static bool GetDestructibleBlockingPath(int bot, const float targetPos[3], int &blockerOut, float hitPosOut[3])
+{
+    blockerOut = -1;
+    ZeroVector(hitPosOut);
+
+    float botPos[3];
+    GetClientAbsOrigin(bot, botPos);
+
+    float mins[3] = { -16.0, -16.0, 0.0 };
+    float maxs[3] = { 16.0, 16.0, 64.0 };
+
+    Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
+    bool blocked = TR_DidHit(hullTrace);
+    if (blocked)
+    {
+        blockerOut = TR_GetEntityIndex(hullTrace);
+        TR_GetEndPosition(hitPosOut, hullTrace);
+    }
+    CloseHandle(hullTrace);
+
+    return (blocked && IsDestructibleObstacle(blockerOut));
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +383,24 @@ while (g_BotPathIndex[client] < g_BotPathLength[client])
 return false;
 }
 
+static void ClearObstacleTarget(int client)
+{
+g_BotObstacleEntity[client] = -1;
+    BotTargetType resumeType = g_BotResumeTarget[client];
+    g_BotResumeTarget[client] = BotTarget_None;
+    ZeroVector(g_BotObstaclePos[client]);
+    g_BotTargetType[client] = (resumeType != BotTarget_None) ? resumeType : BotTarget_None;
+}
+
+static void SetObstacleTarget(int client, int obstacleEnt, const float hitPos[3])
+{
+    g_BotObstacleEntity[client] = obstacleEnt;
+    g_BotResumeTarget[client] = g_BotTargetType[client];
+    CopyVector(hitPos, g_BotObstaclePos[client]);
+    g_BotTargetType[client] = BotTarget_Obstacle;
+    g_BotState[client] = BotState_AttackingObstacle;
+}
+
 // ---------------------------------------------------------------------------
 // Core bot state helpers
 // ---------------------------------------------------------------------------
@@ -279,6 +412,7 @@ g_BotTargetType[client] = BotTarget_None;
 g_BotTargetWaypoint[client] = -1;
 g_BotTargetPlayer[client] = 0;
 ZeroVector(g_BotTargetPos[client]);
+ClearObstacleTarget(client);
 g_BotPathLength[client] = 0;
 g_BotPathIndex[client] = 0;
 ZeroVector(g_BotMoveDir[client]);
@@ -342,7 +476,10 @@ if (!IsClientReady(target) || !IsPlayerAlive(target))
 }
 
 // Prefer direct chase if we have a truly walkable LOS path.
-if (HasClearLineToTarget(client, target))
+int blocker;
+bool hitIsDestructible;
+float hitPos[3];
+if (HasClearLineToTarget(client, target, blocker, hitIsDestructible, hitPos))
 {
     g_BotPathLength[client] = 0;
     g_BotPathIndex[client]  = 0;
@@ -361,6 +498,12 @@ if (HasClearLineToTarget(client, target))
 
     CopyVector(dir, g_BotMoveDir[client]);
     g_BotState[client] = BotState_ChasingPlayer;
+    return;
+}
+
+if (hitIsDestructible && blocker > 0)
+{
+    SetObstacleTarget(client, blocker, hitPos);
     return;
 }
 
@@ -411,6 +554,14 @@ while (distSq <= radius * radius)
     distSq = GetDistanceSquared2D(origin, nodePos);
 }
 
+int blockingDestructible;
+float destructibleHit[3];
+if (GetDestructibleBlockingPath(client, nodePos, blockingDestructible, destructibleHit))
+{
+    SetObstacleTarget(client, blockingDestructible, destructibleHit);
+    return;
+}
+
 float dir2[3];
 float dummyDist;
 if (!ComputeDirectionToPosition(client, nodePos, dir2, dummyDist))
@@ -454,6 +605,14 @@ if (distSq <= radius * radius)
     return;
 }
 
+int blockingDestructible;
+float destructibleHit[3];
+if (GetDestructibleBlockingPath(client, nodePos, blockingDestructible, destructibleHit))
+{
+    SetObstacleTarget(client, blockingDestructible, destructibleHit);
+    return;
+}
+
 float dir[3];
 float dummyDist;
 if (!ComputeDirectionToPosition(client, nodePos, dir, dummyDist))
@@ -491,6 +650,50 @@ CopyVector(dir, g_BotMoveDir[client]);
 g_BotState[client] = BotState_MovingPath;
 
 
+}
+
+static void ThinkObstacleTarget(int client)
+{
+int obstacle = g_BotObstacleEntity[client];
+if (obstacle <= 0 || !IsDestructibleObstacle(obstacle))
+{
+    ClearObstacleTarget(client);
+    return;
+}
+
+float obstaclePos[3];
+if (!GetEntityPosition(obstacle, obstaclePos))
+{
+    CopyVector(g_BotObstaclePos[client], obstaclePos);
+}
+else
+{
+    CopyVector(obstaclePos, g_BotObstaclePos[client]);
+}
+
+float dir[3];
+float dist;
+if (!ComputeDirectionToPosition(client, obstaclePos, dir, dist))
+{
+    ClearObstacleTarget(client);
+    return;
+}
+
+CopyVector(dir, g_BotMoveDir[client]);
+g_BotState[client] = BotState_AttackingObstacle;
+
+if (g_BotResumeTarget[client] == BotTarget_Player)
+{
+    int target = g_BotTargetPlayer[client];
+    int blocker;
+    bool isDestructible;
+    float hitPos[3];
+    if (HasClearLineToTarget(client, target, blocker, isDestructible, hitPos))
+    {
+        ClearObstacleTarget(client);
+        ThinkPlayerTarget(client);
+    }
+}
 }
 
 // ---------------------------------------------------------------------------
@@ -539,6 +742,10 @@ else if (g_BotTargetType[client] == BotTarget_Waypoint)
 else if (g_BotTargetType[client] == BotTarget_Position)
 {
     ThinkPositionTarget(client);
+}
+else if (g_BotTargetType[client] == BotTarget_Obstacle)
+{
+    ThinkObstacleTarget(client);
 }
 else
 {
@@ -648,6 +855,9 @@ g_BotTargetType[i] = BotTarget_None;
 g_BotTargetWaypoint[i] = -1;
 g_BotTargetPlayer[i] = 0;
 ZeroVector(g_BotTargetPos[i]);
+g_BotObstacleEntity[i] = -1;
+g_BotResumeTarget[i] = BotTarget_None;
+ZeroVector(g_BotObstaclePos[i]);
 g_BotPathLength[i] = 0;
 g_BotPathIndex[i] = 0;
 ZeroVector(g_BotMoveDir[i]);
@@ -873,6 +1083,8 @@ UpdateBotStuckState(client, now);
 float dir[3];
 CopyVector(g_BotMoveDir[client], dir);
 
+bool attackingObstacle = (g_BotTargetType[client] == BotTarget_Obstacle);
+
 bool wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
 if (!wantsMove)
 {
@@ -896,6 +1108,12 @@ if (now < g_BotStuckBounceUntil[client])
 {
     buttons |= IN_JUMP;
     buttons |= IN_DUCK;
+}
+
+if (attackingObstacle)
+{
+    buttons |= IN_ATTACK;
+    buttons |= IN_USE;
 }
 
 return Plugin_Changed;
