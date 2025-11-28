@@ -57,6 +57,7 @@ enum BotState
 BotState_Idle = 0,
 BotState_MovingPath,
 BotState_ChasingPlayer,
+BotState_AttackingObstacle,
 BotState_Regrouping
 };
 
@@ -65,7 +66,8 @@ enum BotTargetType
 BotTarget_None = 0,
 BotTarget_Waypoint,
 BotTarget_Player,
-BotTarget_Position
+BotTarget_Position,
+BotTarget_Obstacle
 };
 
 // ---------------------------------------------------------------------------
@@ -83,6 +85,9 @@ BotTargetType g_BotTargetType[MAXPLAYERS + 1];
 int g_BotTargetWaypoint[MAXPLAYERS + 1];
 int g_BotTargetPlayer[MAXPLAYERS + 1];
 float g_BotTargetPos[MAXPLAYERS + 1][3];
+int g_BotObstacleEntity[MAXPLAYERS + 1];
+BotTargetType g_BotResumeTarget[MAXPLAYERS + 1];
+float g_BotObstaclePos[MAXPLAYERS + 1][3];
 
 int g_BotPath[MAXPLAYERS + 1][BOTLOGIC_MAX_PATH_NODES];
 int g_BotPathLength[MAXPLAYERS + 1];
@@ -326,7 +331,7 @@ Step 1: cheap eye ray (visual LOS).
 
 Step 2: player-sized hull trace (movement LOS).
 */
-static bool HasClearLineToTarget(int bot, int target)
+static bool HasClearLineToTarget(int bot, int target, int &blockerOut, bool &isDestructibleOut, float hitPosOut[3])
 {
     int blocker;
     float hitPos[3];
@@ -346,7 +351,7 @@ Handle ray = TR_TraceRayFilterEx(botEye, targetEye, MASK_SOLID, RayType_EndPoint
 bool blocked = TraceHitBlocksTarget(botEye, targetEye, ray, blocker, hitPos);
 CloseHandle(ray);
 
-if (blocked)
+if (blocked && !isDestructibleOut)
 {
     return false;
 }
@@ -363,7 +368,35 @@ Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAY
 bool hullBlocked = TraceHitBlocksTarget(botPos, targetPos, hullTrace, blocker, hitPos);
 CloseHandle(hullTrace);
 
-return !hullBlocked;
+if (!hullBlocked)
+{
+    return true;
+}
+
+if (isDestructibleOut)
+{
+    return false;
+}
+
+return false;
+}
+
+static bool GetDestructibleBlockingPath(int bot, const float targetPos[3], int &blockerOut, float hitPosOut[3])
+{
+    blockerOut = -1;
+    ZeroVector(hitPosOut);
+
+    float botPos[3];
+    GetClientAbsOrigin(bot, botPos);
+
+    float mins[3] = { -16.0, -16.0, 0.0 };
+    float maxs[3] = { 16.0, 16.0, 64.0 };
+
+    Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
+    bool blocked = TraceHitBlocksTarget(botPos, targetPos, hullTrace, blockerOut, hitPosOut);
+    CloseHandle(hullTrace);
+
+    return (blocked && IsDestructibleObstacle(blockerOut));
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +669,14 @@ if (distSq <= radius * radius)
     return;
 }
 
+    int blockingObstacle;
+    float obstacleHit[3];
+    if (GetDestructibleBlockingPath(client, nodePos, blockingObstacle, obstacleHit))
+    {
+        SetObstacleTarget(client, blockingObstacle, obstacleHit);
+        return;
+    }
+
 float dir[3];
 float dummyDist;
 if (!ComputeDirectionToPosition(client, nodePos, dir, dummyDist))
@@ -673,6 +714,50 @@ CopyVector(dir, g_BotMoveDir[client]);
 g_BotState[client] = BotState_MovingPath;
 
 
+}
+
+static void ThinkObstacleTarget(int client)
+{
+int obstacle = g_BotObstacleEntity[client];
+if (obstacle <= 0 || !IsDestructibleObstacle(obstacle))
+{
+    ClearObstacleTarget(client);
+    return;
+}
+
+float obstaclePos[3];
+if (!GetEntityPosition(obstacle, obstaclePos))
+{
+    CopyVector(g_BotObstaclePos[client], obstaclePos);
+}
+else
+{
+    CopyVector(obstaclePos, g_BotObstaclePos[client]);
+}
+
+float dir[3];
+float dist;
+if (!ComputeDirectionToPosition(client, obstaclePos, dir, dist))
+{
+    ClearObstacleTarget(client);
+    return;
+}
+
+CopyVector(dir, g_BotMoveDir[client]);
+g_BotState[client] = BotState_AttackingObstacle;
+
+if (g_BotResumeTarget[client] == BotTarget_Player)
+{
+    int target = g_BotTargetPlayer[client];
+    int blocker;
+    bool isDestructible;
+    float hitPos[3];
+    if (HasClearLineToTarget(client, target, blocker, isDestructible, hitPos))
+    {
+        ClearObstacleTarget(client);
+        ThinkPlayerTarget(client);
+    }
+}
 }
 
 // ---------------------------------------------------------------------------
@@ -726,6 +811,10 @@ else if (g_BotTargetType[client] == BotTarget_Waypoint)
 else if (g_BotTargetType[client] == BotTarget_Position)
 {
     ThinkPositionTarget(client);
+}
+else if (g_BotTargetType[client] == BotTarget_Obstacle)
+{
+    ThinkObstacleTarget(client);
 }
 else
 {
@@ -1082,6 +1171,8 @@ UpdateBotStuckState(client, now);
 float dir[3];
 CopyVector(g_BotMoveDir[client], dir);
 
+bool attackingObstacle = (g_BotTargetType[client] == BotTarget_Obstacle);
+
 bool wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
 if (!wantsMove)
 {
@@ -1105,6 +1196,12 @@ if (now < g_BotStuckBounceUntil[client])
 {
     buttons |= IN_JUMP;
     buttons |= IN_DUCK;
+}
+
+if (attackingObstacle)
+{
+    buttons |= IN_ATTACK;
+    buttons |= IN_USE;
 }
 
 return Plugin_Changed;
