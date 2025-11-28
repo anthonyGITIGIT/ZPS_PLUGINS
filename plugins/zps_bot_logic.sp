@@ -1,21 +1,15 @@
 /**
-
-zps_bot_logic.sp
-
-Core brain and movement logic for custom Zombie Panic! Source zombie bots.
-
-Only controls zombie bots (fake clients).
-
-Movement is driven by simulating "holding W" and applying forward movement.
-
-If there is a clear line of sight to the target player, bots run straight at them.
-
-If line of sight is blocked and waypoints are available, bots path through the waypoint web
-
-toward the player's nearest waypoint, and as soon as LOS is restored they drop the path and
-
-resume direct chasing.
-*/
+ * zps_bot_logic.sp
+ *
+ * Core brain and movement logic for custom Zombie Panic! Source zombie bots.
+ * Only controls zombie bots (fake clients).
+ *
+ * Movement is driven by simulating "holding W" and applying forward movement.
+ * If there is a clear line of sight to the target player, bots run straight at them.
+ * If line of sight is blocked and waypoints are available, bots path through the waypoint web
+ * toward the player's nearest waypoint, and as soon as LOS is restored they drop the path and
+ * resume direct chasing.
+ */
 
 #pragma semicolon 1
 #pragma newdecls required
