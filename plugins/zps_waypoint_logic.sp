@@ -44,7 +44,7 @@ float g_WPOrigin[MAX_WAYPOINTS][3];
 int g_WPLinks[MAX_WAYPOINTS][MAX_LINKS_PER_WP];
 int g_WPLinkCount[MAX_WAYPOINTS];
 
-// Special flag: doorway node (bots treat these more precisely)
+// Legacy doorway flag (always false now that doorway nodes are removed)
 bool g_WPDoorway[MAX_WAYPOINTS];
 
 // Per-client editor state
@@ -358,7 +358,7 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
 }
 
 file.WriteLine("// Waypoint data for map");
-file.WriteLine("// Id, Position, Doorway Flag, Linked Ids");
+file.WriteLine("// Id, Position, Linked Ids (legacy doorway flag removed)");
 file.WriteLine("nodes %d", count);
 
 for (int i = 0; i < MAX_WAYPOINTS; i++)
@@ -368,14 +368,11 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
         continue;
     }
 
-    int doorFlag = g_WPDoorway[i] ? 1 : 0;
-
-    file.WriteLine("node %d %.2f %.2f %.2f %d",
+    file.WriteLine("node %d %.2f %.2f %.2f 0",
                    i,
                    g_WPOrigin[i][0],
                    g_WPOrigin[i][1],
-                   g_WPOrigin[i][2],
-                   doorFlag);
+                   g_WPOrigin[i][2]);
 
     char buffer[256];
     Format(buffer, sizeof(buffer), "links:");
@@ -474,7 +471,12 @@ while (!file.EndOfFile() && file.ReadLine(line, sizeof(line)))
                 g_WPOrigin[id][1]  = y;
                 g_WPOrigin[id][2]  = z;
                 g_WPLinkCount[id]  = 0;
-                g_WPDoorway[id]    = (doorFlag != 0);
+                g_WPDoorway[id]    = false;
+
+                if (doorFlag != 0)
+                {
+                    PrintToServer("[WP] Converted legacy doorway waypoint %d to a normal waypoint.", id);
+                }
 
                 lastNodeId = id;
             }
@@ -820,7 +822,6 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
     //  - Normal: Cyan/Teal
     //  - Aimed: Lime
     //  - Selected: Red
-    //  - Doorway: Orange (when not aimed/selected)
     if (i == selected)
     {
         color[0] = 255; color[1] = 0;   color[2] = 0;   color[3] = 255;
@@ -829,20 +830,12 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
     {
         color[0] = 128; color[1] = 255; color[2] = 0;   color[3] = 255;
     }
-    else if (g_WPDoorway[i])
-    {
-        color[0] = 255; color[1] = 165; color[2] = 0;   color[3] = 255;
-    }
     else
     {
         color[0] = 0;   color[1] = 255; color[2] = 255; color[3] = 200;
     }
 
     float height = 32.0;
-    if (g_WPDoorway[i])
-    {
-        height = 48.0;
-    }
 
     top[0] = center[0];
     top[1] = center[1];
@@ -1083,7 +1076,6 @@ menu.SetTitle("Waypoint Editor");
 menu.AddItem("add_node",         "Add node at player");
 menu.AddItem("remove_aimed",     "Remove aimed node");
 menu.AddItem("select_link",      "Select/link via aimed node");
-menu.AddItem("toggle_doorway",   "Toggle doorway flag on aimed node");
 menu.AddItem("clear_selection",  "Clear selection");
 menu.AddItem("save",             "Save waypoints");
 menu.AddItem("close",            "Close editor");
@@ -1191,21 +1183,6 @@ else if (StrEqual(info, "select_link"))
         }
 
         g_SelectedNode[client] = aimed;
-    }
-
-    ShowWaypointMenu(client);
-}
-else if (StrEqual(info, "toggle_doorway"))
-{
-    int aimed = g_AimedNode[client];
-    if (aimed == -1 || !IsValidWaypointId(aimed))
-    {
-        PrintToChat(client, "[WP] Aim at a waypoint first.");
-    }
-    else
-    {
-        g_WPDoorway[aimed] = !g_WPDoorway[aimed];
-        PrintToChat(client, "[WP] Waypoint %d doorway flag is now: %s.", aimed, g_WPDoorway[aimed] ? "ON" : "OFF");
     }
 
     ShowWaypointMenu(client);
@@ -1325,14 +1302,8 @@ return true;
 
 public any Native_Waypoint_IsDoorway(Handle plugin, int numParams)
 {
-int id = GetNativeCell(1);
-
-if (!IsValidWaypointId(id))
-{
+    // Doorway nodes are no longer supported; always report false for compatibility.
     return false;
-}
-
-return g_WPDoorway[id];
 
 
 }

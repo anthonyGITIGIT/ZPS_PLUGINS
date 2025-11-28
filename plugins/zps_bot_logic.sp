@@ -31,7 +31,6 @@ resume direct chasing.
 #define BOTLOGIC_MAX_PATH_NODES 32
 #define BOTLOGIC_THINK_INTERVAL 0.20
 #define BOTLOGIC_TARGET_RADIUS 50.0
-#define BOTLOGIC_DOORWAY_RADIUS 15.0
 #define BOTLOGIC_FORWARD_SPEED 250.0
 
 #define BOTLOGIC_STUCK_DIST_SQ 25.0 // ~5 units in XY
@@ -147,45 +146,6 @@ static bool GetEntityPosition(int entity, float posOut[3])
     return false;
 }
 
-static bool IsDestructibleObstacle(int entity)
-{
-    if (entity <= MaxClients || !IsValidEntity(entity))
-    {
-        return false;
-    }
-
-    char classname[64];
-    GetEntityClassname(entity, classname, sizeof(classname));
-
-    if (StrContains(classname, "breakable", false) != -1 || StrContains(classname, "barricade", false) != -1)
-    {
-        return true;
-    }
-
-    if (StrEqual(classname, "prop_physics", false) || StrEqual(classname, "prop_physics_multiplayer", false) || StrEqual(classname, "prop_physics_override", false))
-    {
-        return true;
-    }
-
-    if (StrEqual(classname, "func_physbox", false) || StrEqual(classname, "func_physbox_multiplayer", false) || StrEqual(classname, "func_breakable_surf", false))
-    {
-        return true;
-    }
-
-    if (HasEntProp(entity, Prop_Data, "m_takedamage") && GetEntProp(entity, Prop_Data, "m_takedamage") != 0)
-    {
-        if (HasEntProp(entity, Prop_Data, "m_iHealth"))
-        {
-            if (GetEntProp(entity, Prop_Data, "m_iHealth") > 0)
-            {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
 static bool TraceHitBlocksTarget(const float start[3], const float end[3], Handle trace, int &blockerOut, float hitPosOut[3])
 {
     if (!TR_DidHit(trace))
@@ -222,12 +182,7 @@ return dx * dx + dy * dy;
 
 static float GetWaypointArrivalRadius(int nodeId)
 {
-    if (!g_WaypointLibraryAvailable || nodeId < 0)
-    {
-        return BOTLOGIC_TARGET_RADIUS;
-    }
-
-    return Waypoint_IsDoorway(nodeId) ? BOTLOGIC_DOORWAY_RADIUS : BOTLOGIC_TARGET_RADIUS;
+    return BOTLOGIC_TARGET_RADIUS;
 }
 
 static bool ComputeDirectionToPosition(int client, const float targetPos[3], float dirOut[3], float &distOut)
@@ -295,9 +250,6 @@ static void ResetBotRuntimeState(int client)
     g_BotTargetWaypoint[client] = -1;
     g_BotTargetPlayer[client] = 0;
     ZeroVector(g_BotTargetPos[client]);
-    g_BotObstacleEntity[client] = -1;
-    g_BotResumeTarget[client] = BotTarget_None;
-    ZeroVector(g_BotObstaclePos[client]);
     g_BotPathLength[client] = 0;
     g_BotPathIndex[client] = 0;
     ZeroVector(g_BotMoveDir[client]);
@@ -381,9 +333,9 @@ Step 2: player-sized hull trace (movement LOS).
 */
 static bool HasClearLineToTarget(int bot, int target, int &blockerOut, bool &isDestructibleOut, float hitPosOut[3])
 {
-    blockerOut = -1;
-    isDestructibleOut = false;
-    ZeroVector(hitPosOut);
+    int blocker;
+    float hitPos[3];
+    ZeroVector(hitPos);
 
 if (!IsClientReady(bot) || !IsClientReady(target))
 {
@@ -396,11 +348,7 @@ GetClientEyePosition(bot, botEye);
 GetClientEyePosition(target, targetEye);
 
 Handle ray = TR_TraceRayFilterEx(botEye, targetEye, MASK_SOLID, RayType_EndPoint, TraceFilter_IgnorePlayers, 0);
-bool blocked = TraceHitBlocksTarget(botEye, targetEye, ray, blockerOut, hitPosOut);
-if (blocked)
-{
-    isDestructibleOut = IsDestructibleObstacle(blockerOut);
-}
+bool blocked = TraceHitBlocksTarget(botEye, targetEye, ray, blocker, hitPos);
 CloseHandle(ray);
 
 if (blocked && !isDestructibleOut)
@@ -417,11 +365,7 @@ float mins[3] = { -16.0, -16.0, 0.0 };
 float maxs[3] = { 16.0, 16.0, 64.0 };
 
 Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
-bool hullBlocked = TraceHitBlocksTarget(botPos, targetPos, hullTrace, blockerOut, hitPosOut);
-if (hullBlocked)
-{
-    isDestructibleOut = IsDestructibleObstacle(blockerOut);
-}
+bool hullBlocked = TraceHitBlocksTarget(botPos, targetPos, hullTrace, blocker, hitPos);
 CloseHandle(hullTrace);
 
 if (!hullBlocked)
@@ -516,34 +460,6 @@ static bool TryGetCurrentPathNode(int client, float nodePos[3], int &nodeIdOut)
 return false;
 }
 
-static void ClearObstacleTarget(int client)
-{
-BotState oldState = g_BotState[client];
-BotTargetType oldTarget = g_BotTargetType[client];
-
-g_BotObstacleEntity[client] = -1;
-    BotTargetType resumeType = g_BotResumeTarget[client];
-    g_BotResumeTarget[client] = BotTarget_None;
-    ZeroVector(g_BotObstaclePos[client]);
-    g_BotTargetType[client] = (resumeType != BotTarget_None) ? resumeType : BotTarget_None;
-
-    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "cleared obstacle");
-}
-
-static void SetObstacleTarget(int client, int obstacleEnt, const float hitPos[3])
-{
-    BotState oldState = g_BotState[client];
-    BotTargetType oldTarget = g_BotTargetType[client];
-
-    g_BotObstacleEntity[client] = obstacleEnt;
-    g_BotResumeTarget[client] = g_BotTargetType[client];
-    CopyVector(hitPos, g_BotObstaclePos[client]);
-    g_BotTargetType[client] = BotTarget_Obstacle;
-    g_BotState[client] = BotState_AttackingObstacle;
-
-    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "attacking destructible obstacle");
-}
-
 // ---------------------------------------------------------------------------
 // Core bot state helpers
 // ---------------------------------------------------------------------------
@@ -553,7 +469,6 @@ static void ClearBotState(int client, const char[] reason = "reset")
     BotState oldState = g_BotState[client];
     BotTargetType oldTarget = g_BotTargetType[client];
 
-    ClearObstacleTarget(client);
     ResetBotRuntimeState(client);
 
     LogBehaviorChangeIfNeeded(client, oldState, oldTarget, reason);
@@ -629,11 +544,7 @@ if (!IsClientReady(target) || !IsPlayerAlive(target))
     return;
 }
 
-// Prefer direct chase if we have a truly walkable LOS path.
-int blocker;
-bool hitIsDestructible;
-float hitPos[3];
-if (HasClearLineToTarget(client, target, blocker, hitIsDestructible, hitPos))
+if (HasClearLineToTarget(client, target))
 {
     g_BotPathLength[client] = 0;
     g_BotPathIndex[client]  = 0;
@@ -645,8 +556,7 @@ if (HasClearLineToTarget(client, target, blocker, hitIsDestructible, hitPos))
     float dist;
     if (!ComputeDirectionToPosition(client, targetPos, dir, dist))
     {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
+        ClearBotState(client, "failed to compute player direction");
         return;
     }
 
@@ -657,121 +567,70 @@ if (HasClearLineToTarget(client, target, blocker, hitIsDestructible, hitPos))
     return;
 }
 
-if (hitIsDestructible && blocker > 0)
-{
-    SetObstacleTarget(client, blocker, hitPos);
-    return;
-}
-
-// No clear movement LOS: fall back to waypoint pathing toward the player's nearest waypoint.
-bool pathBuilt = false;
-    if (g_WaypointLibraryAvailable && (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[client]))
+// Build or reuse a waypoint path toward the player when LOS is blocked.
+if (g_WaypointLibraryAvailable && (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[client]))
 {
     int endId = Waypoint_FindNearestToClient(target);
-    if (endId < 0)
+    if (endId >= 0)
     {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (no nearest waypoint)");
-        return;
+        BuildPathToWaypoint(client, endId);
     }
-
-    pathBuilt = BuildPathToWaypoint(client, endId);
-    if (!pathBuilt)
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (path build failed)");
-        return;
-    }
-}
-
-if (!pathBuilt)
-{
-    float targetPos[3];
-    GetClientAbsOrigin(target, targetPos);
-
-    float directDir[3];
-    float directDist;
-    if (!ComputeDirectionToPosition(client, targetPos, directDir, directDist))
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "no path; cannot compute direction");
-        return;
-    }
-
-    CopyVector(directDir, g_BotMoveDir[client]);
-    g_BotState[client] = BotState_ChasingPlayer;
-    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, g_WaypointLibraryAvailable ? "direct chase (path unavailable)" : "direct chase (waypoints missing)");
-    return;
 }
 
 float nodePos[3];
 int nodeId;
-if (!TryGetCurrentPathNode(client, nodePos, nodeId))
+if (TryGetCurrentPathNode(client, nodePos, nodeId))
 {
-    float targetPos[3];
-    GetClientAbsOrigin(target, targetPos);
-
-    float directDir[3];
-    float directDist;
-    if (ComputeDirectionToPosition(client, targetPos, directDir, directDist))
+    bool hasNode = true;
+    while (hasNode)
     {
-        CopyVector(directDir, g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (path node invalid)");
-        return;
+        float origin[3];
+        GetClientAbsOrigin(client, origin);
+
+        float radius = GetWaypointArrivalRadius(nodeId);
+        float distSq = GetDistanceSquared2D(origin, nodePos);
+
+        if (distSq > radius * radius)
+        {
+            break;
+        }
+
+        g_BotPathIndex[client]++;
+        hasNode = TryGetCurrentPathNode(client, nodePos, nodeId);
     }
 
-    ZeroVector(g_BotMoveDir[client]);
-    g_BotState[client] = BotState_ChasingPlayer;
-    LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "direct chase (no path node)");
-    return;
-}
-
-float origin[3];
-GetClientAbsOrigin(client, origin);
-
-float radius = GetWaypointArrivalRadius(nodeId);
-float distSq = GetDistanceSquared2D(origin, nodePos);
-while (distSq <= radius * radius)
-{
-    g_BotPathIndex[client]++;
-    if (!TryGetCurrentPathNode(client, nodePos, nodeId))
+    if (hasNode)
     {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
+        float dir2[3];
+        float dummyDist;
+        if (!ComputeDirectionToPosition(client, nodePos, dir2, dummyDist))
+        {
+            ClearBotState(client, "waypoint direction failed");
+            return;
+        }
+
+        CopyVector(dir2, g_BotMoveDir[client]);
+        g_BotState[client] = BotState_MovingPath;
+        LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "following waypoint path to player");
         return;
     }
-
-    radius = GetWaypointArrivalRadius(nodeId);
-    distSq = GetDistanceSquared2D(origin, nodePos);
 }
 
-int blockingObstacle;
-float obstacleHit[3];
-if (GetDestructibleBlockingPath(client, nodePos, blockingObstacle, obstacleHit))
+// Fallback: move directly toward the player even without waypoints.
+float targetPos[3];
+GetClientAbsOrigin(target, targetPos);
+
+float fallbackDir[3];
+float fallbackDist;
+if (!ComputeDirectionToPosition(client, targetPos, fallbackDir, fallbackDist))
 {
-    SetObstacleTarget(client, blockingObstacle, obstacleHit);
+    ClearBotState(client, "failed to compute blocked player direction");
     return;
 }
 
-float dir2[3];
-float dummyDist;
-if (!ComputeDirectionToPosition(client, nodePos, dir2, dummyDist))
-{
-    ZeroVector(g_BotMoveDir[client]);
-    g_BotState[client] = BotState_ChasingPlayer;
-    return;
-}
-
-CopyVector(dir2, g_BotMoveDir[client]);
-g_BotState[client] = BotState_MovingPath;
-
-LogBehaviorChangeIfNeeded(client, oldState, oldTarget, "moving along waypoint path to player");
-
-
+CopyVector(fallbackDir, g_BotMoveDir[client]);
+g_BotState[client] = BotState_ChasingPlayer;
+LogBehaviorChangeIfNeeded(client, oldState, oldTarget, g_WaypointLibraryAvailable ? "direct chase (no waypoint path)" : "direct chase (waypoints missing)");
 }
 
 static void ThinkWaypointTarget(int client)
