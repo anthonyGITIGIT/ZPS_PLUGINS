@@ -62,18 +62,18 @@ native bool Waypoint_IsDoorway(int id);
 
 enum BotState
 {
-BotState_Idle = 0,
-BotState_MovingPath,
-BotState_ChasingPlayer,
-BotState_Regrouping
+    BotState_Idle = 0,
+    BotState_MovingPath,
+    BotState_ChasingPlayer,
+    BotState_Regrouping
 };
 
 enum BotTargetType
 {
-BotTarget_None = 0,
-BotTarget_Waypoint,
-BotTarget_Player,
-BotTarget_Position
+    BotTarget_None = 0,
+    BotTarget_Waypoint,
+    BotTarget_Player,
+    BotTarget_Position
 };
 
 // ---------------------------------------------------------------------------
@@ -118,61 +118,61 @@ float g_BotNextRetargetTime[MAXPLAYERS + 1];
 
 static bool IsClientReady(int client)
 {
-return (client >= 1 && client <= MaxClients && IsClientInGame(client));
+    return (client >= 1 && client <= MaxClients && IsClientInGame(client));
 }
 
 static void ZeroVector(float vec[3])
 {
-vec[0] = 0.0;
-vec[1] = 0.0;
-vec[2] = 0.0;
+    vec[0] = 0.0;
+    vec[1] = 0.0;
+    vec[2] = 0.0;
 }
 
 static void CopyVector(const float src[3], float dest[3])
 {
-dest[0] = src[0];
-dest[1] = src[1];
-dest[2] = src[2];
+    dest[0] = src[0];
+    dest[1] = src[1];
+    dest[2] = src[2];
 }
 
 static float GetDistanceSquared2D(const float a[3], const float b[3])
 {
-float dx = a[0] - b[0];
-float dy = a[1] - b[1];
-return dx * dx + dy * dy;
+    float dx = a[0] - b[0];
+    float dy = a[1] - b[1];
+    return dx * dx + dy * dy;
 }
 
 static bool ComputeDirectionToPosition(int client, const float targetPos[3], float dirOut[3], float &distOut)
 {
-float origin[3];
-GetClientAbsOrigin(client, origin);
+    float origin[3];
+    GetClientAbsOrigin(client, origin);
 
-float dx = targetPos[0] - origin[0];
-float dy = targetPos[1] - origin[1];
-float dz = targetPos[2] - origin[2];
+    float dx = targetPos[0] - origin[0];
+    float dy = targetPos[1] - origin[1];
+    float dz = targetPos[2] - origin[2];
 
-float distSq = dx * dx + dy * dy + dz * dz;
-if (distSq <= 0.0)
-{
-    ZeroVector(dirOut);
-    distOut = 0.0;
-    return false;
-}
+    float distSq = dx * dx + dy * dy + dz * dz;
+    if (distSq <= 0.0)
+    {
+        ZeroVector(dirOut);
+        distOut = 0.0;
+        return false;
+    }
 
-float invDist = 1.0 / SquareRoot(distSq);
-dirOut[0] = dx * invDist;
-dirOut[1] = dy * invDist;
-dirOut[2] = dz * invDist;
+    float invDist = 1.0 / SquareRoot(distSq);
+    dirOut[0] = dx * invDist;
+    dirOut[1] = dy * invDist;
+    dirOut[2] = dz * invDist;
 
-distOut = SquareRoot(distSq);
-return true;
+    distOut = SquareRoot(distSq);
+    return true;
 
 
 }
 
 static void YawFromDirection(const float dir[3], float &yawOut)
 {
-yawOut = RadToDeg(ArcTangent2(dir[1], dir[0]));
+    yawOut = RadToDeg(ArcTangent2(dir[1], dir[0]));
 }
 
 // ---------------------------------------------------------------------------
@@ -181,11 +181,11 @@ yawOut = RadToDeg(ArcTangent2(dir[1], dir[0]));
 
 public bool TraceFilter_IgnorePlayers(int entity, int contentsMask, any data)
 {
-if (entity >= 1 && entity <= MaxClients)
-{
-return false; // ignore players
-}
-return true;
+    if (entity >= 1 && entity <= MaxClients)
+    {
+        return false; // ignore players
+    }
+    return true;
 }
 
 /**
@@ -198,38 +198,38 @@ Step 2: player-sized hull trace (movement LOS).
 */
 static bool HasClearLineToTarget(int bot, int target)
 {
-if (!IsClientReady(bot) || !IsClientReady(target))
-{
-return false;
-}
+    if (!IsClientReady(bot) || !IsClientReady(target))
+    {
+        return false;
+    }
 
-// Step 1: eye-level ray
-float botEye[3], targetEye[3];
-GetClientEyePosition(bot, botEye);
-GetClientEyePosition(target, targetEye);
+    // Step 1: eye-level ray
+    float botEye[3], targetEye[3];
+    GetClientEyePosition(bot, botEye);
+    GetClientEyePosition(target, targetEye);
 
-Handle ray = TR_TraceRayFilterEx(botEye, targetEye, MASK_SOLID, RayType_EndPoint, TraceFilter_IgnorePlayers, 0);
-bool blocked = TR_DidHit(ray);
-CloseHandle(ray);
+    Handle ray = TR_TraceRayFilterEx(botEye, targetEye, MASK_SOLID, RayType_EndPoint, TraceFilter_IgnorePlayers, 0);
+    bool blocked = TR_DidHit(ray);
+    CloseHandle(ray);
 
-if (blocked)
-{
-return false;
-}
+    if (blocked)
+    {
+        return false;
+    }
 
-// Step 2: hull trace approximating the player collision box
-float botPos[3], targetPos[3];
-GetClientAbsOrigin(bot, botPos);
-GetClientAbsOrigin(target, targetPos);
+    // Step 2: hull trace approximating the player collision box
+    float botPos[3], targetPos[3];
+    GetClientAbsOrigin(bot, botPos);
+    GetClientAbsOrigin(target, targetPos);
 
-float mins[3] = { -16.0, -16.0, 0.0 };
-float maxs[3] = { 16.0, 16.0, 64.0 };
+    float mins[3] = { -16.0, -16.0, 0.0 };
+    float maxs[3] = { 16.0, 16.0, 64.0 };
 
-Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
-bool hullBlocked = TR_DidHit(hullTrace);
-CloseHandle(hullTrace);
+    Handle hullTrace = TR_TraceHullFilterEx(botPos, targetPos, mins, maxs, MASK_PLAYERSOLID, TraceFilter_IgnorePlayers, 0);
+    bool hullBlocked = TR_DidHit(hullTrace);
+    CloseHandle(hullTrace);
 
-return !hullBlocked;
+    return !hullBlocked;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,21 +242,21 @@ Build a waypoint path from the client's nearest waypoint to the given endId.
 */
 static bool BuildPathToWaypoint(int client, int endId)
 {
-int startId = Waypoint_FindNearestToClient(client);
-if (startId < 0 || endId < 0)
-{
-return false;
-}
+    int startId = Waypoint_FindNearestToClient(client);
+    if (startId < 0 || endId < 0)
+    {
+        return false;
+    }
 
-int tempPath[BOTLOGIC_MAX_PATH_NODES];
-int pathLen = Waypoint_GetPath(startId, endId, tempPath, BOTLOGIC_MAX_PATH_NODES);
-if (pathLen <= 0)
-{
-return false;
-}
+    int tempPath[BOTLOGIC_MAX_PATH_NODES];
+    int pathLen = Waypoint_GetPath(startId, endId, tempPath, BOTLOGIC_MAX_PATH_NODES);
+    if (pathLen <= 0)
+    {
+        return false;
+    }
 
-g_BotPathLength[client] = pathLen;
-g_BotPathIndex[client] = 0;
+    g_BotPathLength[client] = pathLen;
+    g_BotPathIndex[client] = 0;
 
     for (int i = 0; i < pathLen; i++)
     {
@@ -557,24 +557,26 @@ static void ThinkPositionTarget(int client)
 
 static void BotThink(int client, float now)
 {
-if (!g_bIsCustomBot[client])
-{
-return;
-}
+    if (!g_bIsCustomBot[client])
+    {
+        return;
+    }
 
-if (!IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
-{
-    ClearBotState(client);
-    return;
-}
+    if (!IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
+    {
+        ClearBotState(client);
+        return;
+    }
 
-float lastThink = g_BotLastThink[client];
-if (now - lastThink < BOTLOGIC_THINK_INTERVAL)
-{
-    return;
-}
+    float lastThink = g_BotLastThink[client];
+    if (now - lastThink < BOTLOGIC_THINK_INTERVAL)
+    {
+        return;
+    }
 
-g_BotLastThink[client] = now;
+    g_BotLastThink[client] = now;
+
+    g_BotSpeedScale[client] = 1.0;
 
 g_BotSpeedScale[client] = 1.0;
 
@@ -586,10 +588,16 @@ if (g_BotTargetType[client] == BotTarget_None)
     }
     if (g_BotTargetType[client] == BotTarget_None)
     {
-        ClearBotState(client);
-        return;
+        if (now >= g_BotNextRetargetTime[client])
+        {
+            AutoAcquireTarget(client, now);
+        }
+        if (g_BotTargetType[client] == BotTarget_None)
+        {
+            ClearBotState(client);
+            return;
+        }
     }
-}
 
 if (g_BotTargetType[client] == BotTarget_Player)
 {
@@ -617,30 +625,30 @@ else
 
 static void UpdateBotStuckState(int client, float now)
 {
-float dir[3];
-CopyVector(g_BotMoveDir[client], dir);
+    float dir[3];
+    CopyVector(g_BotMoveDir[client], dir);
 
-bool wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
-if (!wantsMove)
-{
-    g_BotStuckAccum[client] = 0.0;
-    ZeroVector(g_BotLastPos[client]);
-    return;
-}
+    bool wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
+    if (!wantsMove)
+    {
+        g_BotStuckAccum[client] = 0.0;
+        ZeroVector(g_BotLastPos[client]);
+        return;
+    }
 
-float pos[3];
-GetClientAbsOrigin(client, pos);
+    float pos[3];
+    GetClientAbsOrigin(client, pos);
 
-if (g_BotLastPos[client][0] == 0.0 && g_BotLastPos[client][1] == 0.0 && g_BotLastPos[client][2] == 0.0)
-{
-    CopyVector(pos, g_BotLastPos[client]);
-    g_BotStuckAccum[client] = 0.0;
-    return;
-}
+    if (g_BotLastPos[client][0] == 0.0 && g_BotLastPos[client][1] == 0.0 && g_BotLastPos[client][2] == 0.0)
+    {
+        CopyVector(pos, g_BotLastPos[client]);
+        g_BotStuckAccum[client] = 0.0;
+        return;
+    }
 
-float dx = pos[0] - g_BotLastPos[client][0];
-float dy = pos[1] - g_BotLastPos[client][1];
-float distSq = dx * dx + dy * dy;
+    float dx = pos[0] - g_BotLastPos[client][0];
+    float dy = pos[1] - g_BotLastPos[client][1];
+    float distSq = dx * dx + dy * dy;
 
 if (distSq < BOTLOGIC_STUCK_DIST_SQ)
 {
@@ -671,24 +679,48 @@ if (distSq < BOTLOGIC_STUCK_DIST_SQ)
         // try to switch to a waypoint-based path to get around obstacles.
         if (g_BotTargetType[client] == BotTarget_Player && g_BotPathLength[client] <= 0)
         {
-            int target = g_BotTargetPlayer[client];
-            if (IsClientReady(target) && IsPlayerAlive(target))
+            g_BotStuckAccum[client]       = 0.0;
+            float mag = SquareRoot(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+            if (mag > 0.0)
             {
-                int endId = Waypoint_FindNearestToClient(target);
-                if (endId >= 0)
+                g_BotBackoffDir[client][0] = -dir[0] / mag;
+                g_BotBackoffDir[client][1] = -dir[1] / mag;
+                g_BotBackoffDir[client][2] = 0.0;
+            }
+            else
+            {
+                g_BotBackoffDir[client][0] = -1.0;
+                g_BotBackoffDir[client][1] = 0.0;
+                g_BotBackoffDir[client][2] = 0.0;
+            }
+
+            g_BotBackoffUntil[client] = now + BOTLOGIC_BACKOFF_DURATION;
+            g_BotBounceStart[client]  = g_BotBackoffUntil[client];
+            g_BotBounceEnd[client]    = g_BotBounceStart[client] + BOTLOGIC_BOUNCE_DURATION;
+            g_BotBounceCooldownUntil[client] = now + BOTLOGIC_BOUNCE_COOLDOWN;
+
+            // If we're chasing a player directly and have no waypoint path yet,
+            // try to switch to a waypoint-based path to get around obstacles.
+            if (g_BotTargetType[client] == BotTarget_Player && g_BotPathLength[client] <= 0)
+            {
+                int target = g_BotTargetPlayer[client];
+                if (IsClientReady(target) && IsPlayerAlive(target))
                 {
-                    BuildPathToWaypoint(client, endId);
+                    int endId = Waypoint_FindNearestToClient(target);
+                    if (endId >= 0)
+                    {
+                        BuildPathToWaypoint(client, endId);
+                    }
                 }
             }
         }
     }
-}
-else
-{
-    g_BotStuckAccum[client] = 0.0;
-}
+    else
+    {
+        g_BotStuckAccum[client] = 0.0;
+    }
 
-CopyVector(pos, g_BotLastPos[client]);
+    CopyVector(pos, g_BotLastPos[client]);
 
 
 }
@@ -699,21 +731,21 @@ CopyVector(pos, g_BotLastPos[client]);
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int errMax)
 {
-RegPluginLibrary("bot_logic");
+    RegPluginLibrary("bot_logic");
 
-CreateNative("BotLogic_IsCustomBot",           Native_BotLogic_IsCustomBot);
-CreateNative("BotLogic_RegisterBot",          Native_BotLogic_RegisterBot);
-CreateNative("BotLogic_UnregisterBot",        Native_BotLogic_UnregisterBot);
+    CreateNative("BotLogic_IsCustomBot",           Native_BotLogic_IsCustomBot);
+    CreateNative("BotLogic_RegisterBot",          Native_BotLogic_RegisterBot);
+    CreateNative("BotLogic_UnregisterBot",        Native_BotLogic_UnregisterBot);
 
-CreateNative("BotLogic_SetBotTargetWaypoint", Native_BotLogic_SetBotTargetWaypoint);
-CreateNative("BotLogic_SetBotTargetPlayer",   Native_BotLogic_SetBotTargetPlayer);
-CreateNative("BotLogic_SetBotTargetPosition", Native_BotLogic_SetBotTargetPosition);
-CreateNative("BotLogic_ClearBotTarget",       Native_BotLogic_ClearBotTarget);
+    CreateNative("BotLogic_SetBotTargetWaypoint", Native_BotLogic_SetBotTargetWaypoint);
+    CreateNative("BotLogic_SetBotTargetPlayer",   Native_BotLogic_SetBotTargetPlayer);
+    CreateNative("BotLogic_SetBotTargetPosition", Native_BotLogic_SetBotTargetPosition);
+    CreateNative("BotLogic_ClearBotTarget",       Native_BotLogic_ClearBotTarget);
 
-CreateNative("BotLogic_ForceState",           Native_BotLogic_ForceState);
-CreateNative("BotLogic_DebugPrint",           Native_BotLogic_DebugPrint);
+    CreateNative("BotLogic_ForceState",           Native_BotLogic_ForceState);
+    CreateNative("BotLogic_DebugPrint",           Native_BotLogic_DebugPrint);
 
-return APLRes_Success;
+    return APLRes_Success;
 
 
 }
@@ -749,27 +781,27 @@ public void OnPluginStart()
 
 public void OnMapStart()
 {
-for (int i = 1; i <= MaxClients; i++)
-{
-if (g_bIsCustomBot[i])
-{
-ClearBotState(i);
-}
-}
+    for (int i = 1; i <= MaxClients; i++)
+    {
+        if (g_bIsCustomBot[i])
+        {
+            ClearBotState(i);
+        }
+    }
 }
 
 public void OnClientDisconnect(int client)
 {
-if (client < 1 || client > MaxClients)
-{
-return;
-}
+    if (client < 1 || client > MaxClients)
+    {
+        return;
+    }
 
-if (g_bIsCustomBot[client])
-{
-    g_bIsCustomBot[client] = false;
-    ClearBotState(client);
-}
+    if (g_bIsCustomBot[client])
+    {
+        g_bIsCustomBot[client] = false;
+        ClearBotState(client);
+    }
 
 
 }
@@ -780,78 +812,78 @@ if (g_bIsCustomBot[client])
 
 public int Native_BotLogic_IsCustomBot(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-if (client < 1 || client > MaxClients)
-{
-return 0;
-}
+    int client = GetNativeCell(1);
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-return g_bIsCustomBot[client] ? 1 : 0;
+    return g_bIsCustomBot[client] ? 1 : 0;
 
 
 }
 
 public int Native_BotLogic_RegisterBot(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-if (client < 1 || client > MaxClients)
-{
-return 0;
-}
+    int client = GetNativeCell(1);
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-g_bIsCustomBot[client] = true;
-ClearBotState(client);
-return 1;
+    g_bIsCustomBot[client] = true;
+    ClearBotState(client);
+    return 1;
 
 
 }
 
 public int Native_BotLogic_UnregisterBot(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-if (client < 1 || client > MaxClients)
-{
-return 0;
-}
+    int client = GetNativeCell(1);
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-g_bIsCustomBot[client] = false;
-ClearBotState(client);
-return 1;
+    g_bIsCustomBot[client] = false;
+    ClearBotState(client);
+    return 1;
 
 
 }
 
 public int Native_BotLogic_SetBotTargetWaypoint(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-int nodeId = GetNativeCell(2);
+    int client = GetNativeCell(1);
+    int nodeId = GetNativeCell(2);
 
-if (client < 1 || client > MaxClients)
-{
-    return 0;
-}
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-g_BotTargetType[client]     = BotTarget_Waypoint;
-g_BotTargetWaypoint[client] = nodeId;
-g_BotPathLength[client]     = 0;
-g_BotPathIndex[client]      = 0;
-ZeroVector(g_BotMoveDir[client]);
-g_BotState[client]          = BotState_MovingPath;
+    g_BotTargetType[client]     = BotTarget_Waypoint;
+    g_BotTargetWaypoint[client] = nodeId;
+    g_BotPathLength[client]     = 0;
+    g_BotPathIndex[client]      = 0;
+    ZeroVector(g_BotMoveDir[client]);
+    g_BotState[client]          = BotState_MovingPath;
 
-return 1;
+    return 1;
 
 
 }
 
 public int Native_BotLogic_SetBotTargetPlayer(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-int target = GetNativeCell(2);
+    int client = GetNativeCell(1);
+    int target = GetNativeCell(2);
 
-if (client < 1 || client > MaxClients)
-{
-    return 0;
-}
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
 g_BotTargetType[client]   = BotTarget_Player;
 g_BotTargetPlayer[client] = target;
@@ -861,85 +893,85 @@ ZeroVector(g_BotMoveDir[client]);
 g_BotState[client]        = BotState_ChasingPlayer;
 g_BotNextRetargetTime[client] = GetGameTime() + BOTLOGIC_RETARGET_COOLDOWN;
 
-return 1;
+    return 1;
 
 
 }
 
 public int Native_BotLogic_SetBotTargetPosition(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-float pos[3];
-GetNativeArray(2, pos, sizeof(pos));
+    int client = GetNativeCell(1);
+    float pos[3];
+    GetNativeArray(2, pos, sizeof(pos));
 
-if (client < 1 || client > MaxClients)
-{
-    return 0;
-}
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-g_BotTargetType[client] = BotTarget_Position;
-CopyVector(pos, g_BotTargetPos[client]);
-g_BotPathLength[client] = 0;
-g_BotPathIndex[client]  = 0;
-ZeroVector(g_BotMoveDir[client]);
-g_BotState[client]      = BotState_MovingPath;
+    g_BotTargetType[client] = BotTarget_Position;
+    CopyVector(pos, g_BotTargetPos[client]);
+    g_BotPathLength[client] = 0;
+    g_BotPathIndex[client]  = 0;
+    ZeroVector(g_BotMoveDir[client]);
+    g_BotState[client]      = BotState_MovingPath;
 
-return 1;
+    return 1;
 
 
 }
 
 public int Native_BotLogic_ClearBotTarget(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-if (client < 1 || client > MaxClients)
-{
-return 0;
-}
+    int client = GetNativeCell(1);
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-ClearBotState(client);
-return 1;
+    ClearBotState(client);
+    return 1;
 
 
 }
 
 public int Native_BotLogic_ForceState(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-int rawState = GetNativeCell(2);
+    int client = GetNativeCell(1);
+    int rawState = GetNativeCell(2);
 
-if (client < 1 || client > MaxClients)
-{
-    return 0;
-}
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-if (rawState < view_as<int>(BotState_Idle) || rawState > view_as<int>(BotState_Regrouping))
-{
-    return 0;
-}
+    if (rawState < view_as<int>(BotState_Idle) || rawState > view_as<int>(BotState_Regrouping))
+    {
+        return 0;
+    }
 
-g_BotState[client] = view_as<BotState>(rawState);
-return 1;
+    g_BotState[client] = view_as<BotState>(rawState);
+    return 1;
 
 
 }
 
 public int Native_BotLogic_DebugPrint(Handle plugin, int numParams)
 {
-int client = GetNativeCell(1);
-if (client < 1 || client > MaxClients)
-{
-return 0;
-}
+    int client = GetNativeCell(1);
+    if (client < 1 || client > MaxClients)
+    {
+        return 0;
+    }
 
-PrintToServer("[BotLogic] Client %d: isCustom=%d state=%d targetType=%d pathLen=%d pathIndex=%d",
-              client,
-              g_bIsCustomBot[client] ? 1 : 0,
-              g_BotState[client],
-              g_BotTargetType[client],
-              g_BotPathLength[client],
-              g_BotPathIndex[client]);
-return 1;
+    PrintToServer("[BotLogic] Client %d: isCustom=%d state=%d targetType=%d pathLen=%d pathIndex=%d",
+    client,
+    g_bIsCustomBot[client] ? 1 : 0,
+    g_BotState[client],
+    g_BotTargetType[client],
+    g_BotPathLength[client],
+    g_BotPathIndex[client]);
+    return 1;
 
 
 }
@@ -950,24 +982,24 @@ return 1;
 
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon)
 {
-if (!g_bIsCustomBot[client] || !IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
-{
-return Plugin_Continue;
-}
+    if (!g_bIsCustomBot[client] || !IsClientReady(client) || !IsFakeClient(client) || !IsPlayerAlive(client))
+    {
+        return Plugin_Continue;
+    }
 
-float now = GetGameTime();
+    float now = GetGameTime();
 
-BotThink(client, now);
-UpdateBotStuckState(client, now);
+    BotThink(client, now);
+    UpdateBotStuckState(client, now);
 
-float dir[3];
-CopyVector(g_BotMoveDir[client], dir);
+    float dir[3];
+    CopyVector(g_BotMoveDir[client], dir);
 
-bool wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
-if (!wantsMove)
-{
-    return Plugin_Continue;
-}
+    bool wantsMove = (dir[0] != 0.0 || dir[1] != 0.0 || dir[2] != 0.0);
+    if (!wantsMove)
+    {
+        return Plugin_Continue;
+    }
 
 if (now < g_BotBackoffUntil[client])
 {
@@ -1006,7 +1038,17 @@ if (now >= g_BotBounceStart[client] && now <= g_BotBounceEnd[client])
     buttons |= IN_DUCK;
 }
 
-return Plugin_Changed;
+    vel[0] = BOTLOGIC_FORWARD_SPEED * g_BotSpeedScale[client];
+    vel[1] = 0.0;
+    vel[2] = 0.0;
+
+    if (now >= g_BotBounceStart[client] && now <= g_BotBounceEnd[client])
+    {
+        buttons |= IN_JUMP;
+        buttons |= IN_DUCK;
+    }
+
+    return Plugin_Changed;
 
 
 }
