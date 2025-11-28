@@ -44,7 +44,7 @@ float g_WPOrigin[MAX_WAYPOINTS][3];
 int g_WPLinks[MAX_WAYPOINTS][MAX_LINKS_PER_WP];
 int g_WPLinkCount[MAX_WAYPOINTS];
 
-// Special flag: doorway node (bots treat these more precisely)
+// Legacy doorway flag (always false now that doorway nodes are removed)
 bool g_WPDoorway[MAX_WAYPOINTS];
 
 // Per-client editor state
@@ -73,14 +73,23 @@ public any Native_Waypoint_IsDoorway(Handle plugin, int numParams);
 
 static bool IsValidWaypointId(int id)
 {
-return (id >= 0 && id < MAX_WAYPOINTS && g_WPUsed[id]);
+    return (id >= 0 && id < MAX_WAYPOINTS && g_WPUsed[id]);
 }
 
 static void CopyVector(const float src[3], float dest[3])
 {
-dest[0] = src[0];
-dest[1] = src[1];
-dest[2] = src[2];
+    dest[0] = src[0];
+    dest[1] = src[1];
+    dest[2] = src[2];
+}
+
+static float DistanceSquared(const float a[3], const float b[3])
+{
+    float dx = a[0] - b[0];
+    float dy = a[1] - b[1];
+    float dz = a[2] - b[2];
+
+    return dx*dx + dy*dy + dz*dz;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,134 +98,126 @@ dest[2] = src[2];
 
 static int AllocateWaypoint(const float pos[3])
 {
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-if (!g_WPUsed[i])
-{
-g_WPUsed[i] = true;
-CopyVector(pos, g_WPOrigin[i]);
-g_WPLinkCount[i] = 0;
-g_WPDoorway[i] = false;
-return i;
-}
-}
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
+    {
+        if (!g_WPUsed[i])
+        {
+            g_WPUsed[i] = true;
+            CopyVector(pos, g_WPOrigin[i]);
+            g_WPLinkCount[i] = 0;
+            g_WPDoorway[i] = false;
+            return i;
+        }
+    }
 
-return -1;
-
-
+    return -1;
 }
 
 static void DeleteWaypoint(int id)
 {
-if (!IsValidWaypointId(id))
-{
-return;
-}
+    if (!IsValidWaypointId(id))
+    {
+        return;
+    }
 
 // Remove references from other nodes
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-    if (!g_WPUsed[i])
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
     {
-        continue;
-    }
-
-    for (int j = 0; j < g_WPLinkCount[i]; j++)
-    {
-        if (g_WPLinks[i][j] == id)
+        if (!g_WPUsed[i])
         {
-            // Shift down
-            for (int k = j; k < g_WPLinkCount[i] - 1; k++)
+            continue;
+        }
+
+        for (int j = 0; j < g_WPLinkCount[i]; j++)
+        {
+            if (g_WPLinks[i][j] == id)
             {
-                g_WPLinks[i][k] = g_WPLinks[i][k + 1];
+                // Shift down
+                for (int k = j; k < g_WPLinkCount[i] - 1; k++)
+                {
+                    g_WPLinks[i][k] = g_WPLinks[i][k + 1];
+                }
+                g_WPLinkCount[i]--;
+                j--;
             }
-            g_WPLinkCount[i]--;
-            j--;
         }
     }
-}
 
-g_WPUsed[id] = false;
-g_WPLinkCount[id] = 0;
-g_WPDoorway[id] = false;
-
-
+    g_WPUsed[id] = false;
+    g_WPLinkCount[id] = 0;
+    g_WPDoorway[id] = false;
 }
 
 static bool LinkWaypoints(int a, int b)
 {
-if (!IsValidWaypointId(a) || !IsValidWaypointId(b) || a == b)
-{
-return false;
-}
-
-// Already linked?
-for (int i = 0; i < g_WPLinkCount[a]; i++)
-{
-    if (g_WPLinks[a][i] == b)
+    if (!IsValidWaypointId(a) || !IsValidWaypointId(b) || a == b)
     {
-        return true;
+        return false;
     }
-}
 
-// Capacity check
-if (g_WPLinkCount[a] >= MAX_LINKS_PER_WP || g_WPLinkCount[b] >= MAX_LINKS_PER_WP)
-{
-    return false;
-}
+    // Already linked?
+    for (int i = 0; i < g_WPLinkCount[a]; i++)
+    {
+        if (g_WPLinks[a][i] == b)
+        {
+            return true;
+        }
+    }
 
-g_WPLinks[a][g_WPLinkCount[a]++] = b;
-g_WPLinks[b][g_WPLinkCount[b]++] = a;
+    // Capacity check
+    if (g_WPLinkCount[a] >= MAX_LINKS_PER_WP || g_WPLinkCount[b] >= MAX_LINKS_PER_WP)
+    {
+        return false;
+    }
 
-return true;
+    g_WPLinks[a][g_WPLinkCount[a]++] = b;
+    g_WPLinks[b][g_WPLinkCount[b]++] = a;
 
-
+    return true;
 }
 
 static void UnlinkWaypoints(int a, int b)
 {
-if (!IsValidWaypointId(a) || !IsValidWaypointId(b) || a == b)
-{
-return;
-}
-
-for (int i = 0; i < g_WPLinkCount[a]; i++)
-{
-    if (g_WPLinks[a][i] == b)
+    if (!IsValidWaypointId(a) || !IsValidWaypointId(b) || a == b)
     {
-        for (int k = i; k < g_WPLinkCount[a] - 1; k++)
-        {
-            g_WPLinks[a][k] = g_WPLinks[a][k + 1];
-        }
-        g_WPLinkCount[a]--;
-        break;
+        return;
     }
-}
 
-for (int j = 0; j < g_WPLinkCount[b]; j++)
-{
-    if (g_WPLinks[b][j] == a)
+    for (int i = 0; i < g_WPLinkCount[a]; i++)
     {
-        for (int k = j; k < g_WPLinkCount[b] - 1; k++)
+        if (g_WPLinks[a][i] == b)
         {
-            g_WPLinks[b][k] = g_WPLinks[b][k + 1];
+            for (int k = i; k < g_WPLinkCount[a] - 1; k++)
+            {
+                g_WPLinks[a][k] = g_WPLinks[a][k + 1];
+            }
+            g_WPLinkCount[a]--;
+            break;
         }
-        g_WPLinkCount[b]--;
-        break;
     }
-}
 
-
+    for (int j = 0; j < g_WPLinkCount[b]; j++)
+    {
+        if (g_WPLinks[b][j] == a)
+        {
+            for (int k = j; k < g_WPLinkCount[b] - 1; k++)
+            {
+                g_WPLinks[b][k] = g_WPLinks[b][k + 1];
+            }
+            g_WPLinkCount[b]--;
+            break;
+        }
+    }
 }
 
 static void ClearWaypoints()
 {
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-g_WPUsed[i] = false;
-g_WPLinkCount[i] = 0;
-g_WPDoorway[i] = false;
-}
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
+    {
+        g_WPUsed[i] = false;
+        g_WPLinkCount[i] = 0;
+        g_WPDoorway[i] = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,96 +226,96 @@ g_WPDoorway[i] = false;
 
 static void ReindexWaypoints()
 {
-int remap[MAX_WAYPOINTS];
-int next = 0;
+    int remap[MAX_WAYPOINTS];
+    int next = 0;
 
-// Build mapping oldId -> newId, compacted
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-    if (g_WPUsed[i])
+    // Build mapping oldId -> newId, compacted
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
     {
-        remap[i] = next++;
-    }
-    else
-    {
-        remap[i] = -1;
-    }
-}
-
-if (next == 0)
-{
-    // No waypoints, just clear
-    ClearWaypoints();
-    return;
-}
-
-bool  newUsed[MAX_WAYPOINTS];
-float newOrigin[MAX_WAYPOINTS][3];
-int   newLinks[MAX_WAYPOINTS][MAX_LINKS_PER_WP];
-int   newLinkCount[MAX_WAYPOINTS];
-bool  newDoorway[MAX_WAYPOINTS];
-
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-    newUsed[i] = false;
-    newLinkCount[i] = 0;
-    newDoorway[i] = false;
-}
-
-for (int oldId = 0; oldId < MAX_WAYPOINTS; oldId++)
-{
-    int newId = remap[oldId];
-    if (newId == -1)
-    {
-        continue;
+        if (g_WPUsed[i])
+        {
+            remap[i] = next++;
+        }
+        else
+        {
+            remap[i] = -1;
+        }
     }
 
-    newUsed[newId] = true;
-    CopyVector(g_WPOrigin[oldId], newOrigin[newId]);
-    newDoorway[newId] = g_WPDoorway[oldId];
-
-    // Remap links for this node, skip invalid and self
-    for (int j = 0; j < g_WPLinkCount[oldId]; j++)
+    if (next == 0)
     {
-        int oldNeighbor = g_WPLinks[oldId][j];
-        int newNeighbor = (oldNeighbor >= 0 && oldNeighbor < MAX_WAYPOINTS) ? remap[oldNeighbor] : -1;
+        // No waypoints, just clear
+        ClearWaypoints();
+        return;
+    }
 
-        if (newNeighbor == -1 || newNeighbor == newId)
+    bool  newUsed[MAX_WAYPOINTS];
+    float newOrigin[MAX_WAYPOINTS][3];
+    int   newLinks[MAX_WAYPOINTS][MAX_LINKS_PER_WP];
+    int   newLinkCount[MAX_WAYPOINTS];
+    bool  newDoorway[MAX_WAYPOINTS];
+
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
+    {
+        newUsed[i] = false;
+        newLinkCount[i] = 0;
+        newDoorway[i] = false;
+    }
+
+    for (int oldId = 0; oldId < MAX_WAYPOINTS; oldId++)
+    {
+        int newId = remap[oldId];
+        if (newId == -1)
         {
             continue;
         }
 
-        // Deduplicate
-        bool exists = false;
-        for (int k = 0; k < newLinkCount[newId]; k++)
+        newUsed[newId] = true;
+        CopyVector(g_WPOrigin[oldId], newOrigin[newId]);
+        newDoorway[newId] = g_WPDoorway[oldId];
+
+        // Remap links for this node, skip invalid and self
+        for (int j = 0; j < g_WPLinkCount[oldId]; j++)
         {
-            if (newLinks[newId][k] == newNeighbor)
+            int oldNeighbor = g_WPLinks[oldId][j];
+            int newNeighbor = (oldNeighbor >= 0 && oldNeighbor < MAX_WAYPOINTS) ? remap[oldNeighbor] : -1;
+
+            if (newNeighbor == -1 || newNeighbor == newId)
             {
-                exists = true;
-                break;
+                continue;
+            }
+
+            // Deduplicate
+            bool exists = false;
+            for (int k = 0; k < newLinkCount[newId]; k++)
+            {
+                if (newLinks[newId][k] == newNeighbor)
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists && newLinkCount[newId] < MAX_LINKS_PER_WP)
+            {
+                newLinks[newId][newLinkCount[newId]++] = newNeighbor;
             }
         }
+    }
 
-        if (!exists && newLinkCount[newId] < MAX_LINKS_PER_WP)
+    // Copy back
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
+    {
+        g_WPUsed[i] = newUsed[i];
+        CopyVector(newOrigin[i], g_WPOrigin[i]);
+        g_WPLinkCount[i] = newLinkCount[i];
+        g_WPDoorway[i] = newDoorway[i];
+
+        for (int j = 0; j < newLinkCount[i]; j++)
         {
-            newLinks[newId][newLinkCount[newId]++] = newNeighbor;
+            g_WPLinks[i][j] = newLinks[i][j];
         }
     }
-}
-
-// Copy back
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-    g_WPUsed[i] = newUsed[i];
-    CopyVector(newOrigin[i], g_WPOrigin[i]);
-    g_WPLinkCount[i] = newLinkCount[i];
-    g_WPDoorway[i] = newDoorway[i];
-
-    for (int j = 0; j < newLinkCount[i]; j++)
-    {
-        g_WPLinks[i][j] = newLinks[i][j];
-    }
-}
 
 
 }
@@ -357,7 +358,7 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
 }
 
 file.WriteLine("// Waypoint data for map");
-file.WriteLine("// Id, Position, Doorway Flag, Linked Ids");
+file.WriteLine("// Id, Position, Linked Ids (legacy doorway flag removed)");
 file.WriteLine("nodes %d", count);
 
 for (int i = 0; i < MAX_WAYPOINTS; i++)
@@ -367,14 +368,11 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
         continue;
     }
 
-    int doorFlag = g_WPDoorway[i] ? 1 : 0;
-
-    file.WriteLine("node %d %.2f %.2f %.2f %d",
+    file.WriteLine("node %d %.2f %.2f %.2f 0",
                    i,
                    g_WPOrigin[i][0],
                    g_WPOrigin[i][1],
-                   g_WPOrigin[i][2],
-                   doorFlag);
+                   g_WPOrigin[i][2]);
 
     char buffer[256];
     Format(buffer, sizeof(buffer), "links:");
@@ -473,7 +471,12 @@ while (!file.EndOfFile() && file.ReadLine(line, sizeof(line)))
                 g_WPOrigin[id][1]  = y;
                 g_WPOrigin[id][2]  = z;
                 g_WPLinkCount[id]  = 0;
-                g_WPDoorway[id]    = (doorFlag != 0);
+                g_WPDoorway[id]    = false;
+
+                if (doorFlag != 0)
+                {
+                    PrintToServer("[WP] Converted legacy doorway waypoint %d to a normal waypoint.", id);
+                }
 
                 lastNodeId = id;
             }
@@ -545,12 +548,25 @@ static int GetWaypointCount()
 int count = 0;
 for (int i = 0; i < MAX_WAYPOINTS; i++)
 {
-if (g_WPUsed[i])
-{
-count++;
-}
+    if (g_WPUsed[i])
+    {
+        count++;
+    }
 }
 return count;
+}
+
+static bool HasAnyWaypoints()
+{
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
+    {
+        if (g_WPUsed[i])
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -666,125 +682,125 @@ g_iHaloSprite = PrecacheModel("materials/sprites/light_glow03.vmt");
 
 void DrawWaypointsForClient(int client)
 {
-if (g_iBeamSprite == -1)
-{
-return;
-}
-
-if (!IsClientInGame(client) || !IsPlayerAlive(client))
-{
-    return;
-}
-
-if (!g_EditorOpen[client])
-{
-    return;
-}
-
-int aimed    = g_AimedNode[client];
-int selected = g_SelectedNode[client];
-
-float eye[3];
-float ang[3];
-float fwd[3];
-
-GetClientEyePosition(client, eye);
-GetClientEyeAngles(client, ang);
-GetAngleVectors(ang, fwd, NULL_VECTOR, NULL_VECTOR);
-
-bool visible[MAX_WAYPOINTS];
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-    visible[i] = false;
-}
-
-// Determine which nodes are within FOV, draw distance, and same floor
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-    if (!g_WPUsed[i])
+    if (g_iBeamSprite == -1)
     {
-        continue;
+        return;
     }
 
-    float toNode[3];
-    toNode[0] = g_WPOrigin[i][0] - eye[0];
-    toNode[1] = g_WPOrigin[i][1] - eye[1];
-    toNode[2] = g_WPOrigin[i][2] - eye[2];
-
-    float dz = toNode[2];
-    if (dz > NODE_FLOOR_DELTA_MAX || dz < -NODE_FLOOR_DELTA_MAX)
+    if (!IsClientInGame(client) || !IsPlayerAlive(client))
     {
-        continue;
+        return;
     }
 
-    float lenSq = toNode[0] * toNode[0] + toNode[1] * toNode[1] + toNode[2] * toNode[2];
-    if (lenSq > NODE_DRAW_MAX_DIST_SQ)
+    if (!g_EditorOpen[client] || !HasAnyWaypoints())
     {
-        continue;
+        return;
     }
 
-    if (lenSq <= 1.0)
+    int aimed    = g_AimedNode[client];
+    int selected = g_SelectedNode[client];
+
+    float eye[3];
+    float ang[3];
+    float fwd[3];
+
+    GetClientEyePosition(client, eye);
+    GetClientEyeAngles(client, ang);
+    GetAngleVectors(ang, fwd, NULL_VECTOR, NULL_VECTOR);
+
+    bool visible[MAX_WAYPOINTS];
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
     {
-        continue;
+        visible[i] = false;
     }
 
-    float len    = SquareRoot(lenSq);
-    float invLen = 1.0 / len;
-
-    float dir[3];
-    dir[0] = toNode[0] * invLen;
-    dir[1] = toNode[1] * invLen;
-    dir[2] = toNode[2] * invLen;
-
-    float dot = fwd[0] * dir[0] + fwd[1] * dir[1] + fwd[2] * dir[2];
-    if (dot >= NODE_FOV_COS)
+    // Determine which nodes are within FOV, draw distance, and same floor
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
     {
-        visible[i] = true;
-    }
-}
-
-// Draw links (white beams), only when both endpoints are visible
-int linkColor[4] = {255, 255, 255, 255};
-float start[3], end[3];
-
-for (int i = 0; i < MAX_WAYPOINTS; i++)
-{
-    if (!g_WPUsed[i])
-    {
-        continue;
-    }
-
-    for (int j = 0; j < g_WPLinkCount[i]; j++)
-    {
-        int other = g_WPLinks[i][j];
-        if (!IsValidWaypointId(other))
+        if (!g_WPUsed[i])
         {
             continue;
         }
 
-        if (other <= i)
+        float toNode[3];
+        toNode[0] = g_WPOrigin[i][0] - eye[0];
+        toNode[1] = g_WPOrigin[i][1] - eye[1];
+        toNode[2] = g_WPOrigin[i][2] - eye[2];
+
+        float dz = toNode[2];
+        if (dz > NODE_FLOOR_DELTA_MAX || dz < -NODE_FLOOR_DELTA_MAX)
         {
             continue;
         }
 
-        if (!visible[i] || !visible[other])
+        float lenSq = toNode[0] * toNode[0] + toNode[1] * toNode[1] + toNode[2] * toNode[2];
+        if (lenSq > NODE_DRAW_MAX_DIST_SQ)
         {
             continue;
         }
 
-        CopyVector(g_WPOrigin[i], start);
-        CopyVector(g_WPOrigin[other], end);
-        start[2] += 10.0;
-        end[2]   += 10.0;
+        if (lenSq <= 1.0)
+        {
+            continue;
+        }
 
-        // Thinner link beam
-        TE_SetupBeamPoints(start, end, g_iBeamSprite, 0,
-                           0, 0, 0.30, 0.8, 0.6, 0, 0.0, linkColor, 0);
-        TE_SendToClient(client);
+        float len    = SquareRoot(lenSq);
+        float invLen = 1.0 / len;
+
+        float dir[3];
+        dir[0] = toNode[0] * invLen;
+        dir[1] = toNode[1] * invLen;
+        dir[2] = toNode[2] * invLen;
+
+        float dot = fwd[0] * dir[0] + fwd[1] * dir[1] + fwd[2] * dir[2];
+        if (dot >= NODE_FOV_COS)
+        {
+            visible[i] = true;
+        }
     }
-}
 
-float time = GetGameTime();
+    // Draw links (white beams), only when both endpoints are visible
+    int linkColor[4] = {255, 255, 255, 255};
+    float start[3], end[3];
+
+    for (int i = 0; i < MAX_WAYPOINTS; i++)
+    {
+        if (!g_WPUsed[i])
+        {
+            continue;
+        }
+
+        for (int j = 0; j < g_WPLinkCount[i]; j++)
+        {
+            int other = g_WPLinks[i][j];
+            if (!IsValidWaypointId(other))
+            {
+                continue;
+            }
+
+            if (other <= i)
+            {
+                continue;
+            }
+
+            if (!visible[i] || !visible[other])
+            {
+                continue;
+            }
+
+            CopyVector(g_WPOrigin[i], start);
+            CopyVector(g_WPOrigin[other], end);
+            start[2] += 10.0;
+            end[2]   += 10.0;
+
+            // Thinner link beam
+            TE_SetupBeamPoints(start, end, g_iBeamSprite, 0,
+                               0, 0, 0.30, 0.8, 0.6, 0, 0.0, linkColor, 0);
+            TE_SendToClient(client);
+        }
+    }
+
+    float time = GetGameTime();
 
 // Draw nodes: neon beacon + pulse ring
 for (int i = 0; i < MAX_WAYPOINTS; i++)
@@ -806,7 +822,6 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
     //  - Normal: Cyan/Teal
     //  - Aimed: Lime
     //  - Selected: Red
-    //  - Doorway: Orange (when not aimed/selected)
     if (i == selected)
     {
         color[0] = 255; color[1] = 0;   color[2] = 0;   color[3] = 255;
@@ -815,20 +830,12 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
     {
         color[0] = 128; color[1] = 255; color[2] = 0;   color[3] = 255;
     }
-    else if (g_WPDoorway[i])
-    {
-        color[0] = 255; color[1] = 165; color[2] = 0;   color[3] = 255;
-    }
     else
     {
         color[0] = 0;   color[1] = 255; color[2] = 255; color[3] = 200;
     }
 
     float height = 32.0;
-    if (g_WPDoorway[i])
-    {
-        height = 48.0;
-    }
 
     top[0] = center[0];
     top[1] = center[1];
@@ -924,79 +931,95 @@ return true;
 
 static int FindAimedWaypoint(int client)
 {
-float eye[3];
-float ang[3];
-float fwd[3];
+    float eye[3];
+    float ang[3];
+    float fwd[3];
 
-GetClientEyePosition(client, eye);
-GetClientEyeAngles(client, ang);
-GetAngleVectors(ang, fwd, NULL_VECTOR, NULL_VECTOR);
+    GetClientEyePosition(client, eye);
+    GetClientEyeAngles(client, ang);
+    GetAngleVectors(ang, fwd, NULL_VECTOR, NULL_VECTOR);
 
-float end[3];
-end[0] = eye[0] + fwd[0] * WP_AIM_MAX_DIST;
-end[1] = eye[1] + fwd[1] * WP_AIM_MAX_DIST;
-end[2] = eye[2] + fwd[2] * WP_AIM_MAX_DIST;
+    float end[3];
+    end[0] = eye[0] + fwd[0] * WP_AIM_MAX_DIST;
+    end[1] = eye[1] + fwd[1] * WP_AIM_MAX_DIST;
+    end[2] = eye[2] + fwd[2] * WP_AIM_MAX_DIST;
 
-Handle trace = TR_TraceRayFilterEx(eye, end, MASK_SOLID, RayType_EndPoint, TraceEntityFilterPlayers, client);
+    Handle trace = TR_TraceRayFilterEx(eye, end, MASK_SOLID, RayType_EndPoint, TraceEntityFilterPlayers, client);
 
-if (trace != null)
-{
-    float hitPos[3];
-    TR_GetEndPosition(hitPos, trace);
-    delete trace;
-
-    int best = -1;
-    float bestDistSq = WP_AIM_MAX_DIST * WP_AIM_MAX_DIST;
-
-    for (int i = 0; i < MAX_WAYPOINTS; i++)
+    if (trace != null)
     {
-        if (!g_WPUsed[i])
+        float hitPos[3];
+        TR_GetEndPosition(hitPos, trace);
+        delete trace;
+
+        int best = -1;
+        float bestDistSq = WP_AIM_MAX_DIST * WP_AIM_MAX_DIST;
+
+        for (int i = 0; i < MAX_WAYPOINTS; i++)
         {
-            continue;
+            if (!g_WPUsed[i])
+            {
+                continue;
+            }
+
+            float distSq = DistanceSquared(g_WPOrigin[i], hitPos);
+            if (distSq < bestDistSq)
+            {
+                bestDistSq = distSq;
+                best = i;
+            }
         }
 
-        float dx = g_WPOrigin[i][0] - hitPos[0];
-        float dy = g_WPOrigin[i][1] - hitPos[1];
-        float dz = g_WPOrigin[i][2] - hitPos[2];
-
-        float distSq = dx*dx + dy*dy + dz*dz;
-        if (distSq < bestDistSq)
-        {
-            bestDistSq = distSq;
-            best = i;
-        }
+        return best;
     }
 
-    return best;
-}
-
-return -1;
+    return -1;
 
 
 }
 
 public Action Timer_UpdateAimAndDraw(Handle timer)
 {
-for (int client = 1; client <= MaxClients; client++)
-{
-if (!IsClientInGame(client) || !IsPlayerAlive(client))
-{
-g_AimedNode[client] = -1;
-continue;
-}
-
-    if (g_EditorOpen[client])
+    bool anyEditorOpen = false;
+    for (int client = 1; client <= MaxClients; client++)
     {
-        g_AimedNode[client] = FindAimedWaypoint(client);
-        DrawWaypointsForClient(client);
+        if (g_EditorOpen[client])
+        {
+            anyEditorOpen = true;
+            break;
+        }
     }
-    else
-    {
-        g_AimedNode[client] = -1;
-    }
-}
 
-return Plugin_Continue;
+    if (!anyEditorOpen)
+    {
+        return Plugin_Continue;
+    }
+
+    bool hasWaypoints = HasAnyWaypoints();
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsClientInGame(client) || !IsPlayerAlive(client))
+        {
+            g_AimedNode[client] = -1;
+            continue;
+        }
+
+        if (!g_EditorOpen[client])
+        {
+            g_AimedNode[client] = -1;
+            continue;
+        }
+
+        g_AimedNode[client] = hasWaypoints ? FindAimedWaypoint(client) : -1;
+
+        if (hasWaypoints)
+        {
+            DrawWaypointsForClient(client);
+        }
+    }
+
+    return Plugin_Continue;
 
 
 }
@@ -1009,38 +1032,38 @@ public void ShowWaypointMenu(int client);
 
 public Action Command_WaypointEditor(int client, int args)
 {
-if (client <= 0 || !IsClientInGame(client))
-{
-return Plugin_Handled;
-}
+    if (client <= 0 || !IsClientInGame(client))
+    {
+        return Plugin_Handled;
+    }
 
-if ((GetUserFlagBits(client) & ADMFLAG_ROOT) == 0)
-{
-    PrintToChat(client, "[WP] You do not have permission to use the waypoint editor.");
+    if ((GetUserFlagBits(client) & ADMFLAG_ROOT) == 0)
+    {
+        PrintToChat(client, "[WP] You do not have permission to use the waypoint editor.");
+        return Plugin_Handled;
+    }
+
+    if (!g_EditorOpen[client])
+    {
+        LoadWaypointsFromFile();
+
+        g_EditorOpen[client] = true;
+        g_AimedNode[client] = -1;
+        g_SelectedNode[client] = -1;
+
+        PrintToChat(client, "[WP] Editor opened.");
+        ShowWaypointMenu(client);
+    }
+    else
+    {
+        g_EditorOpen[client] = false;
+        g_AimedNode[client] = -1;
+        g_SelectedNode[client] = -1;
+
+        PrintToChat(client, "[WP] Editor closed.");
+    }
+
     return Plugin_Handled;
-}
-
-if (!g_EditorOpen[client])
-{
-    LoadWaypointsFromFile();
-
-    g_EditorOpen[client] = true;
-    g_AimedNode[client] = -1;
-    g_SelectedNode[client] = -1;
-
-    PrintToChat(client, "[WP] Editor opened.");
-    ShowWaypointMenu(client);
-}
-else
-{
-    g_EditorOpen[client] = false;
-    g_AimedNode[client] = -1;
-    g_SelectedNode[client] = -1;
-
-    PrintToChat(client, "[WP] Editor closed.");
-}
-
-return Plugin_Handled;
 
 
 }
@@ -1053,7 +1076,6 @@ menu.SetTitle("Waypoint Editor");
 menu.AddItem("add_node",         "Add node at player");
 menu.AddItem("remove_aimed",     "Remove aimed node");
 menu.AddItem("select_link",      "Select/link via aimed node");
-menu.AddItem("toggle_doorway",   "Toggle doorway flag on aimed node");
 menu.AddItem("clear_selection",  "Clear selection");
 menu.AddItem("save",             "Save waypoints");
 menu.AddItem("close",            "Close editor");
@@ -1165,21 +1187,6 @@ else if (StrEqual(info, "select_link"))
 
     ShowWaypointMenu(client);
 }
-else if (StrEqual(info, "toggle_doorway"))
-{
-    int aimed = g_AimedNode[client];
-    if (aimed == -1 || !IsValidWaypointId(aimed))
-    {
-        PrintToChat(client, "[WP] Aim at a waypoint first.");
-    }
-    else
-    {
-        g_WPDoorway[aimed] = !g_WPDoorway[aimed];
-        PrintToChat(client, "[WP] Waypoint %d doorway flag is now: %s.", aimed, g_WPDoorway[aimed] ? "ON" : "OFF");
-    }
-
-    ShowWaypointMenu(client);
-}
 else if (StrEqual(info, "clear_selection"))
 {
     g_SelectedNode[client] = -1;
@@ -1231,11 +1238,7 @@ for (int i = 0; i < MAX_WAYPOINTS; i++)
         continue;
     }
 
-    float dx = g_WPOrigin[i][0] - origin[0];
-    float dy = g_WPOrigin[i][1] - origin[1];
-    float dz = g_WPOrigin[i][2] - origin[2];
-
-    float distSq = dx*dx + dy*dy + dz*dz;
+    float distSq = DistanceSquared(g_WPOrigin[i], origin);
     if (bestId == -1 || distSq < bestDistSq)
     {
         bestDistSq = distSq;
@@ -1299,14 +1302,8 @@ return true;
 
 public any Native_Waypoint_IsDoorway(Handle plugin, int numParams)
 {
-int id = GetNativeCell(1);
-
-if (!IsValidWaypointId(id))
-{
+    // Doorway nodes are no longer supported; always report false for compatibility.
     return false;
-}
-
-return g_WPDoorway[id];
 
 
 }
