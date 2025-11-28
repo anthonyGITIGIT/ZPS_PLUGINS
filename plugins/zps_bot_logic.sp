@@ -122,6 +122,11 @@ float dy = a[1] - b[1];
 return dx * dx + dy * dy;
 }
 
+static float GetWaypointArrivalRadius(int nodeId)
+{
+return (nodeId >= 0 && Waypoint_IsDoorway(nodeId)) ? BOTLOGIC_DOORWAY_RADIUS : BOTLOGIC_TARGET_RADIUS;
+}
+
 static bool ComputeDirectionToPosition(int client, const float targetPos[3], float dirOut[3], float &distOut)
 {
 float origin[3];
@@ -246,6 +251,23 @@ g_BotPath[client][i] = tempPath[i];
 return true;
 }
 
+static bool TryGetCurrentPathNode(int client, float nodePos[3], int &nodeIdOut)
+{
+while (g_BotPathIndex[client] < g_BotPathLength[client])
+{
+    int nodeId = g_BotPath[client][g_BotPathIndex[client]];
+    if (Waypoint_GetOrigin(nodeId, nodePos))
+    {
+        nodeIdOut = nodeId;
+        return true;
+    }
+
+    g_BotPathIndex[client]++;
+}
+
+return false;
+}
+
 // ---------------------------------------------------------------------------
 // Core bot state helpers
 // ---------------------------------------------------------------------------
@@ -361,45 +383,32 @@ if (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[cl
     }
 }
 
-int nodeId = g_BotPath[client][g_BotPathIndex[client]];
-
 float nodePos[3];
-if (!Waypoint_GetOrigin(nodeId, nodePos))
+int nodeId;
+if (!TryGetCurrentPathNode(client, nodePos, nodeId))
 {
-    g_BotPathIndex[client]++;
-    if (g_BotPathIndex[client] >= g_BotPathLength[client])
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        return;
-    }
-
-    nodeId = g_BotPath[client][g_BotPathIndex[client]];
-    if (!Waypoint_GetOrigin(nodeId, nodePos))
-    {
-        ZeroVector(g_BotMoveDir[client]);
-        g_BotState[client] = BotState_ChasingPlayer;
-        return;
-    }
+    ZeroVector(g_BotMoveDir[client]);
+    g_BotState[client] = BotState_ChasingPlayer;
+    return;
 }
 
 float origin[3];
 GetClientAbsOrigin(client, origin);
 
+float radius = GetWaypointArrivalRadius(nodeId);
 float distSq = GetDistanceSquared2D(origin, nodePos);
-if (distSq <= BOTLOGIC_TARGET_RADIUS * BOTLOGIC_TARGET_RADIUS)
+while (distSq <= radius * radius)
 {
     g_BotPathIndex[client]++;
-    if (g_BotPathIndex[client] >= g_BotPathLength[client])
+    if (!TryGetCurrentPathNode(client, nodePos, nodeId))
     {
         ZeroVector(g_BotMoveDir[client]);
         g_BotState[client] = BotState_ChasingPlayer;
         return;
     }
 
-    // Recurse into next node this frame for smoother path transitions.
-    ThinkPlayerTarget(client);
-    return;
+    radius = GetWaypointArrivalRadius(nodeId);
+    distSq = GetDistanceSquared2D(origin, nodePos);
 }
 
 float dir2[3];
@@ -437,7 +446,7 @@ float origin[3];
 GetClientAbsOrigin(client, origin);
 
 float distSq = GetDistanceSquared2D(origin, nodePos);
-float radius = Waypoint_IsDoorway(nodeId) ? BOTLOGIC_DOORWAY_RADIUS : BOTLOGIC_TARGET_RADIUS;
+float radius = GetWaypointArrivalRadius(nodeId);
 
 if (distSq <= radius * radius)
 {
