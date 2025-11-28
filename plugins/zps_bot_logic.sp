@@ -22,6 +22,7 @@ resume direct chasing.
 
 #include <sourcemod>
 #include <sdktools>
+#include <sdktools_trace>
 
 // ---------------------------------------------------------------------------
 // Configuration
