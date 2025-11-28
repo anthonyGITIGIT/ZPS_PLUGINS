@@ -633,12 +633,6 @@ if (hitIsDestructible && blocker > 0)
     return;
 }
 
-if (hitIsDestructible && blocker > 0)
-{
-    SetObstacleTarget(client, blocker, hitPos);
-    return;
-}
-
 // No clear movement LOS: fall back to waypoint pathing toward the player's nearest waypoint.
 bool pathBuilt = false;
     if (g_WaypointLibraryAvailable && (g_BotPathLength[client] <= 0 || g_BotPathIndex[client] >= g_BotPathLength[client]))
@@ -725,11 +719,11 @@ while (distSq <= radius * radius)
     distSq = GetDistanceSquared2D(origin, nodePos);
 }
 
-int blockingDestructible;
-float destructibleHit[3];
-if (GetDestructibleBlockingPath(client, nodePos, blockingDestructible, destructibleHit))
+int blockingObstacle;
+float obstacleHit[3];
+if (GetDestructibleBlockingPath(client, nodePos, blockingObstacle, obstacleHit))
 {
-    SetObstacleTarget(client, blockingDestructible, destructibleHit);
+    SetObstacleTarget(client, blockingObstacle, obstacleHit);
     return;
 }
 
@@ -786,21 +780,13 @@ if (distSq <= radius * radius)
     return;
 }
 
-int blockingDestructible;
-float destructibleHit[3];
-if (GetDestructibleBlockingPath(client, nodePos, blockingDestructible, destructibleHit))
-{
-    SetObstacleTarget(client, blockingDestructible, destructibleHit);
-    return;
-}
-
-int blockingDestructible;
-float destructibleHit[3];
-if (GetDestructibleBlockingPath(client, nodePos, blockingDestructible, destructibleHit))
-{
-    SetObstacleTarget(client, blockingDestructible, destructibleHit);
-    return;
-}
+    int blockingObstacle;
+    float obstacleHit[3];
+    if (GetDestructibleBlockingPath(client, nodePos, blockingObstacle, obstacleHit))
+    {
+        SetObstacleTarget(client, blockingObstacle, obstacleHit);
+        return;
+    }
 
 float dir[3];
 float dummyDist;
