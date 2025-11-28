@@ -33,6 +33,12 @@ Before making any changes:
 
 The framework depends on these interfaces staying stable.
 
+5. After implementing new behavior or changing existing behavior in a meaningful way, you must also:
+
+   * Review `agent.md` for sections that describe that behavior.
+   * Update those sections to match the new reality.
+   * Remove or rewrite information that is now wrong or misleading.
+
 ---
 
 ## 2. High-level architecture
@@ -109,8 +115,8 @@ Save format:
 
 * For each node:
 
-  node <id> <x> <y> <z> <doorFlag>
-  links: <neighborId> <neighborId> ...
+  node `<id> <x> <y> <z> <doorFlag>`
+  links: `<neighborId> <neighborId> ...`
 
 * For links, only neighbors `other >= id` are written to avoid duplicating undirected edges.
 
@@ -515,7 +521,45 @@ This policy is intended to keep the workflow simple and predictable: by default,
 
 ---
 
-## 9. Summary
+## 9. Self-maintenance of `agent.md`
+
+This file is part of the project and must evolve with the codebase. As the agent, you are expected to keep it accurate and lean.
+
+1. When you add or significantly change behavior, you must:
+
+   * Identify which sections of `agent.md` describe that behavior (architecture, flow, APIs, policies, etc.).
+   * Update those sections so they correctly describe the new implementation.
+   * Remove or rewrite any statements that are now incorrect, misleading, or obsolete.
+
+2. What to add:
+
+   * For new features or patterns that a future agent needs to know, briefly document:
+
+     * Where the feature lives (which plugin and roughly which area).
+     * How it interacts with existing components (`Waypoint_*`, `BotLogic_*`, director).
+     * Any new constraints or invariants that must be preserved.
+
+3. What to remove:
+
+   * Old behavior descriptions that no longer match the code.
+   * “Historical” notes that only describe how things used to work, unless they are still relevant for understanding current design decisions.
+
+4. Style and scope:
+
+   * Keep `agent.md` concise and implementation-focused.
+   * Do not duplicate comments that already exist clearly in code unless they are critical for high-level understanding.
+   * Prefer updating existing sections over adding new ones if the topic overlaps.
+
+5. Process:
+
+   * Treat edits to `agent.md` as part of the same change set as the code you are modifying.
+   * Mention in your commit message/summary that `agent.md` was updated to reflect the new behavior.
+
+By following this, each new agent run will have an up-to-date description of how the system works, and `agent.md` will remain a reliable source of truth alongside the code.
+
+---
+
+## 10. Summary
 
 * This repo implements a custom bot framework for Zombie Panic! Source using three cooperating SourceMod plugins.
 * The main interactions are through well-defined `Waypoint_*` and `BotLogic_*` natives.
@@ -526,3 +570,4 @@ This policy is intended to keep the workflow simple and predictable: by default,
   * Keep changes scoped and backward compatible with existing natives.
   * Propose a plan, wait for user confirmation, then implement.
   * Work directly on the `main` branch by default and do not create branches or PRs unless strictly necessary.
+  * Update `agent.md` whenever your changes alter behavior, and remove outdated information so this document stays current.
