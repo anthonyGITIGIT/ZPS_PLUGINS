@@ -133,6 +133,8 @@ public Action Command_WaypointMenu(int client, int args)
     }
 
     InitializeMapData();
+    g_bDrawEnabled[client] = true;
+    EnsureDrawTimer();
     ShowWaypointMenu(client);
     return Plugin_Handled;
 }
@@ -164,6 +166,10 @@ public Action Command_DrawToggle(int client, int args)
 // =============================
 void ShowWaypointMenu(int client)
 {
+    InitializeMapData();
+    g_bDrawEnabled[client] = true;
+    EnsureDrawTimer();
+
     Menu menu = new Menu(MenuHandler_Waypoint);
     char title[64];
     if (g_iSelectedWp[client] != -1)
