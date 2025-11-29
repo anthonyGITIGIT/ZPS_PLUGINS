@@ -34,7 +34,6 @@ enum struct BotState
 }
 
 BotState g_BotState[MAXPLAYERS + 1];
-Handle g_hThinkTimer = INVALID_HANDLE;
 ConVar g_hDebug;
 bool g_bWaypointLib = false;
 
@@ -49,7 +48,7 @@ public Plugin myinfo = {
 public void OnPluginStart()
 {
     g_hDebug = CreateConVar("zps_bot_debug", "0", "Enable bot debug logging", 0, true, 0.0, true, 1.0);
-    g_hThinkTimer = CreateTimer(THINK_INTERVAL, Timer_BotThink, _, TIMER_REPEAT);
+    CreateTimer(THINK_INTERVAL, Timer_BotThink, _, TIMER_REPEAT);
 }
 
 public void OnAllPluginsLoaded()
