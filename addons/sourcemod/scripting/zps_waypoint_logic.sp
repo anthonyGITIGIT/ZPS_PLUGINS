@@ -20,6 +20,7 @@ float g_fWaypointPos[MAX_WAYPOINTS][3];
 int g_iWaypointFlags[MAX_WAYPOINTS];
 int g_iLinkCount[MAX_WAYPOINTS];
 int g_iLinks[MAX_WAYPOINTS][MAX_LINKS_PER_WAYPOINT];
+char g_sMapName[PLATFORM_MAX_PATH];
 
 int g_iSelectedWp[MAXPLAYERS + 1];
 bool g_bDrawEnabled[MAXPLAYERS + 1];
@@ -657,7 +658,6 @@ int GetNextOnPath(int fromId, int toId)
 // =============================
 // Storage
 // =============================
-char g_sMapName[64];
 
 bool SaveWaypointsForMap()
 {
