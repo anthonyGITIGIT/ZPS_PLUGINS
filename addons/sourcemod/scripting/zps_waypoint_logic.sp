@@ -27,6 +27,7 @@ bool g_bDrawEnabled[MAXPLAYERS + 1];
 Handle g_hDrawTimer = INVALID_HANDLE;
 int g_iBeamModel;
 int g_iHaloModel;
+bool g_bMapInitialized;
 
 public Plugin myinfo = {
     name = "ZPS Waypoint Logic",
@@ -49,6 +50,7 @@ public void OnPluginStart()
     RegAdminCmd("sm_wp_draw", Command_DrawToggle, ADMFLAG_GENERIC, "Toggle waypoint drawing");
 
     ClearWaypoints();
+    g_bMapInitialized = false;
     for (int i = 1; i <= MaxClients; i++)
     {
         g_iSelectedWp[i] = -1;
@@ -57,10 +59,8 @@ public void OnPluginStart()
 
 public void OnMapStart()
 {
-    Precache();
-    GetCurrentMap(g_sMapName, sizeof(g_sMapName));
-    CreateDirectory(WAYPOINT_FILE_DIR, 511);
-    LoadWaypointsForMap();
+    g_bMapInitialized = false;
+    InitializeMapData();
 }
 
 public void OnMapEnd()
@@ -76,6 +76,11 @@ public void OnClientDisconnect(int client)
 {
     g_bDrawEnabled[client] = false;
     g_iSelectedWp[client] = -1;
+}
+
+public void OnConfigsExecuted()
+{
+    InitializeMapData();
 }
 
 // =============================
@@ -126,6 +131,8 @@ public Action Command_WaypointMenu(int client, int args)
     {
         return Plugin_Handled;
     }
+
+    InitializeMapData();
     ShowWaypointMenu(client);
     return Plugin_Handled;
 }
@@ -136,6 +143,8 @@ public Action Command_DrawToggle(int client, int args)
     {
         return Plugin_Handled;
     }
+
+    InitializeMapData();
 
     g_bDrawEnabled[client] = !g_bDrawEnabled[client];
     if (g_bDrawEnabled[client])
@@ -782,6 +791,8 @@ void ParseWaypointLine(const char[] line)
 // =============================
 void EnsureDrawTimer()
 {
+    InitializeMapData();
+
     if (g_hDrawTimer == INVALID_HANDLE)
     {
         g_hDrawTimer = CreateTimer(DRAW_INTERVAL, Timer_DrawWaypoints, _, TIMER_REPEAT);
@@ -861,10 +872,30 @@ void DrawWaypointsForClient(int client)
 
 void Precache()
 {
-    g_iBeamModel = PrecacheModel("materials/sprites/laserbeam.vmt");
-    g_iHaloModel = PrecacheModel("materials/sprites/halo01.vmt");
+    if (g_iBeamModel == 0)
+    {
+        g_iBeamModel = PrecacheModel("materials/sprites/laserbeam.vmt");
+    }
+    if (g_iHaloModel == 0)
+    {
+        g_iHaloModel = PrecacheModel("materials/sprites/halo01.vmt");
+    }
 }
 
 // =============================
 // Utility
 // =============================
+void InitializeMapData()
+{
+    if (g_bMapInitialized)
+    {
+        return;
+    }
+
+    GetCurrentMap(g_sMapName, sizeof(g_sMapName));
+    CreateDirectory(WAYPOINT_FILE_DIR, 511);
+    Precache();
+    LoadWaypointsForMap();
+
+    g_bMapInitialized = true;
+}
