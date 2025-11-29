@@ -868,10 +868,3 @@ void Precache()
 // =============================
 // Utility
 // =============================
-float GetVectorDistance(const float vec1[3], const float vec2[3])
-{
-    float dx = vec1[0] - vec2[0];
-    float dy = vec1[1] - vec2[1];
-    float dz = vec1[2] - vec2[2];
-    return SquareRoot(dx * dx + dy * dy + dz * dz);
-}
